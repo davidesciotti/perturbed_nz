@@ -69,7 +69,6 @@ eta_IA = ISTF.IA_free['eta_IA']
 beta_IA = ISTF.IA_free['beta_IA']
 C_IA = ISTF.IA_fixed['C_IA']
 
-simps_z_step_size = 1e-4
 sqrt2 = np.sqrt(2)
 sqrt2pi = np.sqrt(2 * np.pi)
 
@@ -82,6 +81,7 @@ zminus_pert = rng.uniform(-0.15, 0.15, N_pert)
 zplus_pert = rng.uniform(-0.15, 0.15, N_pert)
 omega_fid_pert = rng.uniform(0.69, 0.99)
 c_pert = np.ones((N_pert,))
+
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
 
@@ -171,10 +171,11 @@ zp_bin_grid = np.append(zp_bin_grid, z_edges)  # add bin edges
 zp_bin_grid = np.sort(zp_bin_grid)
 zp_bin_grid = np.unique(zp_bin_grid)  # remove duplicates (first and last edges were already included)
 zp_bin_grid = np.tile(zp_bin_grid, (zbins, 1))  # repeat the grid for each bin (in each row)
-for i in range(zbins):
-    zp_bin_grid[i, :] = np.where(zp_bin_grid[i, :] > z_edges[i], zp_bin_grid[i, :], 0)  # remove all the points below the bin edge
+for i in range(zbins):  # remove all the points below the bin edge
+    zp_bin_grid[i, :] = np.where(zp_bin_grid[i, :] > z_edges[i], zp_bin_grid[i, :], 0)
 
-def niz_unnorm_simps(z, i, pph):
+
+def niz_unnormalized_simps(z, i, pph):
     """numerator of Eq. (112) of ISTF, with simpson integration"""
     assert type(i) == int, 'i must be an integer'
     niz_unnorm_integrand = pph(zp_bin_grid[i, :], z)
@@ -185,7 +186,7 @@ def niz_unnorm_simps(z, i, pph):
 
 def niz_unnormalized(z, i, pph):
     """
-    :param z: float, does not accept an array
+    :param z: float, does not accept an array. Same as above, but with quad_vec
     """
     assert type(i) == int, 'i must be an integer'
     niz_unnorm = quad_vec(pph, z_edges[i], z_edges[i + 1], args=z)[0]
@@ -238,8 +239,6 @@ plt.plot(z_grid, niz_tot, label='niz_tot')
 plt.legend()
 
 assert 1 > 2
-
-# step 1 - let's try to build the perturbed n(z) as a sum of 20 Gaussians
 
 z_p = 0.2
 pph_pert_list = [pph_pert(z_p, z) for z in z_grid]
