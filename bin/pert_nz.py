@@ -83,7 +83,7 @@ N_pert = 20
 rng = np.random.default_rng()
 nu_pert = rng.uniform(-1, 1, N_pert)
 nu_pert /= np.sum(nu_pert)  # normalize the weights to 1
-zminus_pert = rng.uniform(-0.15, 0.15, N_pert)
+z_minus_pert = rng.uniform(-0.15, 0.15, N_pert)
 zplus_pert = rng.uniform(-0.15, 0.15, N_pert)
 omega_fid_pert = rng.uniform(0.69, 0.99)
 c_pert = np.ones((N_pert,))
@@ -103,8 +103,8 @@ def sigma_n(z_minus_Case, z_plus_case, sigma_in):
     return sigma_in * (1 - ratio) / (1 + ratio)
 
 
-zparam_pert = z_case(zminus_pert, zplus_pert)
-sigma_pert = sigma_n(zminus_pert, zplus_pert, sigma_in)
+zparam_pert = z_case(z_minus_pert, zplus_pert)
+sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
 
 
 # n_bar = np.genfromtxt("%s/output/n_bar.txt" % project_path)
@@ -150,8 +150,21 @@ def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in,
     assert type(sigma_in_equals_sigma_out) == bool, "sigma_in_equals_out must be a boolean"
 
     if sigma_in_equals_sigma_out:
+
+        # I don't need these parameters in this case
+        assert z_minus_case is None, 'the function does not need the z_minus_case parameter if sigma_in equals sigma_out'
+        assert z_plus_case is None, 'the function does not need the z_plus_case parameter if sigma_in equals sigma_out'
+        assert sigma_case is None, 'the function does not need the sigma_case parameter if sigma_in equals sigma_out'
+        assert sigma_in is None, 'the function does not need the sigma_in parameter if sigma_in equals sigma_out'
+
         return (z_in[zbin_idx] - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in[zbin_idx] + z_case[zbin_idx])
+
     else:
+
+        # I don't need these parameters in this case
+        assert z_case is None, 'the function does not need the z_case parameter if sigma_in is not equal to sigma_out'
+        assert z_in is None, 'the function does not need the z_in parameter if sigma_in is not equal to sigma_out'
+
         result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
                  ((sigma_case[zbin_idx] / sigma_in[zbin_idx]) ** (-2) - 1)
         return result
@@ -161,18 +174,29 @@ def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in,
 @njit
 def P_eff(z_p, z, zbin_idx):
     # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
-    return P(z_p, z, zbin_idx, zminus_eff, zplus_eff, sigma_case, sigma_in, z_in, sigma_in_equals_sigma_out=False)
+    return P(z_p, z, zbin_idx, None, z_minus_eff, z_plus_eff, sigma_case, sigma_in, z_in,
+             sigma_in_equals_sigma_out=False)
 
 
 @njit
 def P_out(z_p, z, zbin_idx):
-    # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
-    return P(z_p, z, zbin_idx, zminus_out, zplus_out, sigma_out, sigma_in, z_in, sigma_in_equals_sigma_out=False)
+    return P(z_p, z, zbin_idx, None, z_minus_out, z_plus_out, sigma_out, sigma_in, z_in,
+             sigma_in_equals_sigma_out=True)
 
 
 @njit
-def R_out(z_p, z, z_in, z_out, sigma_in, sigma_out):
-    print('sum is mising in this function?')
+def R(z_p, z, zbin_idx, sigma_case, nu_case, sigma_in, z_in, z_case, z_minus_case, z_plus_case, sigma_in_equals_sigma_out):
+    P_shortened = P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case,
+                    sigma_in, z_in, sigma_in_equals_sigma_out)
+    result = nu_case[zbin_idx] * sigma_in[zbin_idx] / sigma_case[zbin_idx] * np.exp(
+        - P_shortened/ (2 * (sigma_in[zbin_idx] * (1 + z)) ** 2))
+    return result
+
+
+@njit
+def R_pert(z_p, z, zbin_idx):
+    to_sum = [R(z_p, z, zbin_idx, sigma_pert, nu_n, sigma_in, z_in, z_case, z_minus_case, z_plus_case, sigma_in_equals_sigma_out) for nu_n in nu_pert]
+    return np.sum([R])
     return sigma_in / sigma_out * np.exp(- P_out(z_p, z, z_in, z_out) / (2 * (sigma_in * (1 + z)) ** 2))
 
 
