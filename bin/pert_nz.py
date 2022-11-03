@@ -1,9 +1,9 @@
 import sys
-import time
 from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+import ray
 import time
 import numpy as np
 import quadpy
@@ -31,9 +31,14 @@ rcParams = mpl_cfg.mpl_rcParams_dict
 plt.rcParams.update(rcParams)
 matplotlib.use('Qt5Agg')
 
+ray.shutdown()
+ray.init()
+
 ###############################################################################
 ###############################################################################
 ###############################################################################
+
+# TODO use parallel processing!
 
 
 script_start = time.perf_counter()
@@ -201,6 +206,22 @@ def niz_normalization(i, niz_unnormalized_func, pph):
     return quad(niz_unnormalized_func, z_edges[0], z_edges[-1], args=(i, pph))[0]
 
 
+@ray.remote
+def niz_normalized_ray(z, zbin_idx, pph):  # ! the only difference with the one below is the decorator!
+    """this is a wrapper function which normalizes the result. The if-else is needed not to compute the normalization
+    for each z, but only once for each zbin_idx"""
+
+    if type(z) == float or type(z) == int:
+        return niz_unnormalized(z, zbin_idx, pph) / niz_normalization(zbin_idx, niz_unnormalized, pph)
+
+    elif type(z) == np.ndarray:
+        niz_unnormalized_arr = np.asarray([niz_unnormalized(z_value, zbin_idx, pph) for z_value in z])
+        return niz_unnormalized_arr / niz_normalization(zbin_idx, niz_unnormalized, pph)
+
+    else:
+        raise TypeError('z must be a float, an int or a numpy array')
+
+
 def niz_normalized(z, zbin_idx, pph):
     """this is a wrapper function which normalizes the result. The if-else is needed not to compute the normalization
     for each z, but only once for each zbin_idx"""
@@ -233,7 +254,7 @@ def mean_z(zbin_idx, pph):
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
     return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[0], z_edges[-1])[0]
 
-
+@ray.remote
 def mean_z_simps(zbin_idx, pph):
     """mean redshift of the galaxies in the zbin_idx-th bin; faster version with simpson integration"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
@@ -253,21 +274,39 @@ colors = cm.get_cmap('rainbow')(colors)
 
 niz_fid = np.zeros((zbins, z_num))
 niz_true = np.zeros((zbins, z_num))
+niz_shift = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
-for zbin_idx in range(zbins):
+# ! test parallel:
+start_time = time.time()
+for zbin_idx in range(2):
+    niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
+    niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
+print('parallel time: ', time.time() - start_time)
+
+start_time = time.time()
+for zbin_idx in range(2):
     niz_fid[zbin_idx, :] = niz_normalized(z_grid, zbin_idx, pph_fid)
     niz_true[zbin_idx, :] = niz_normalized(z_grid, zbin_idx, pph_true)
-    zmean_fid[zbin_idx] = mean_z_simps(zbin_idx, pph_fid)
-    zmean_tot[zbin_idx] = mean_z_simps(zbin_idx, pph_true)
+print('serial time: ', time.time() - start_time)
+# ! end test parallel
+
+for zbin_idx in range(zbins):
+    niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
+    niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
+    zmean_fid[zbin_idx] = ray.get(mean_z_simps_ray.remote(zbin_idx, pph_fid))
+    zmean_tot[zbin_idx] = ray.get(mean_z_simps_ray.remote(zbin_idx, pph_true))
 
 delta_z = zmean_tot - zmean_fid
+for zbin_idx in range(zbins):
+    niz_shift[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
 
 plt.figure()
 for zbin_idx in range(zbins):
     plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid', color=colors[zbin_idx])
-    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true', color=colors[zbin_idx], ls='--')
+    # plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true', color=colors[zbin_idx], ls='--')
+    plt.plot(z_grid, niz_shift[zbin_idx, :], label='niz_shift', color=colors[zbin_idx], ls='--')
     plt.axvline(zmean_fid[zbin_idx], color=colors[zbin_idx], linestyle='dotted', label='zmean_fid')
     plt.axvline(zmean_tot[zbin_idx], color=colors[zbin_idx], linestyle='dotted', label='zmean_tot')
 plt.legend()
