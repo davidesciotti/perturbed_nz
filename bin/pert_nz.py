@@ -140,12 +140,12 @@ def pph_tot(z_p, z, omega_fid=omega_fid_pert):
 
 @njit
 def P_out(z_p, z, z_in, z_out):
-    return (z_in - z_out) * (2 * z_p - 2 * z + z_in + z_out)  # sigma_in == sigma_out
+    return (z_in - z_out) * (2 * z_p - 2 * z + z_in + z_out)  # if sigma_in == sigma_out
 
 
 @njit
 def R_out(z_p, z, z_in, z_out, sigma_in, sigma_out):
-    print('sum is mising in this function')
+    print('sum is mising in this function?')
     return sigma_in / sigma_out * np.exp(- P_out(z_p, z, z_in, z_out) / (2 * (sigma_in * (1 + z)) ** 2))
 
 
@@ -230,7 +230,7 @@ def niz_unnorm_stef(z, i):
 def mean_z(zbin_idx, pph):
     """mean redshift of the galaxies in the zbin_idx-th bin"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[zbin_idx], z_edges[zbin_idx + 1])[0]
+    return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[0], z_edges[-1])[0]
 
 
 z_num = 200
