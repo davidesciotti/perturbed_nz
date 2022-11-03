@@ -34,12 +34,11 @@ matplotlib.use('Qt5Agg')
 ray.shutdown()
 ray.init()
 
-###############################################################################
-###############################################################################
-###############################################################################
+start = time.perf_counter()
 
-# TODO use parallel processing!
-
+###############################################################################
+###############################################################################
+###############################################################################
 
 script_start = time.perf_counter()
 c_lightspeed = ISTF.constants['c']
@@ -91,25 +90,25 @@ c_pert = np.ones((N_pert,))
 
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
+# TODO do not redefine functions here! Take as many as you can from wf.py
+
+# a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
+# _case should be _out, _n or _eff
+def z_case(z_minus_case, z_plus_case):
+    return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
 
 
-# a couple simple functions to go from (z_minus, z_plus) to (zparam, sigma)
-def z_n(z_minus, z_plus):
-    return -2 * z_minus / (1 + z_minus / z_plus)
-
-
-def sigma_n(z_minus, z_plus, sigma_in):
-    ratio = z_minus / z_plus
+def sigma_n(z_minus_Case, z_plus_case, sigma_in):
+    ratio = z_minus_Case / z_plus_case
     return sigma_in * (1 - ratio) / (1 + ratio)
 
 
-zparam_pert = z_n(zminus_pert, zplus_pert)
+zparam_pert = z_case(zminus_pert, zplus_pert)
 sigma_pert = sigma_n(zminus_pert, zplus_pert, sigma_in)
 
 
 # n_bar = np.genfromtxt("%s/output/n_bar.txt" % project_path)
 # lumin_ratio = np.genfromtxt("%s/input/scaledmeanlum-E2Sa_EXTRAPOLATED.txt" % project_path)
-# TODO do not redefine functions here! Take as many as you can from wf.py
 
 ####################################### function definition
 
@@ -145,8 +144,30 @@ def pph_true(z_p, z, omega_fid=omega_fid_pert):
 
 
 @njit
-def P_out(z_p, z, z_in, z_out):
-    return (z_in - z_out) * (2 * z_p - 2 * z + z_in + z_out)  # if sigma_in == sigma_out
+def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in, z_in, sigma_in_equals_sigma_out):
+    """ parameters named with ..._case shpuld be _out, _n or _eff"""
+    assert type(zbin_idx) == int, "zbin_idx must be an integer"
+    assert type(sigma_in_equals_sigma_out) == bool, "sigma_in_equals_out must be a boolean"
+
+    if sigma_in_equals_sigma_out:
+        return (z_in[zbin_idx] - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in[zbin_idx] + z_case[zbin_idx])
+    else:
+        result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
+                 ((sigma_case[zbin_idx] / sigma_in[zbin_idx]) ** (-2) - 1)
+        return result
+
+
+# these are just convenience wrapper functions
+@njit
+def P_eff(z_p, z, zbin_idx):
+    # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
+    return P(z_p, z, zbin_idx, zminus_eff, zplus_eff, sigma_case, sigma_in, z_in, sigma_in_equals_sigma_out=False)
+
+
+@njit
+def P_out(z_p, z, zbin_idx):
+    # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
+    return P(z_p, z, zbin_idx, zminus_out, zplus_out, sigma_out, sigma_in, z_in, sigma_in_equals_sigma_out=False)
 
 
 @njit
@@ -182,28 +203,28 @@ for i in range(zbins):  # remove all the points below the bin edge
     zp_bin_grid[i, :] = np.where(zp_bin_grid[i, :] > z_edges[i], zp_bin_grid[i, :], 0)
 
 
-def niz_unnormalized_simps(z, i, pph):
+def niz_unnormalized_simps(z, zbin_idx, pph):
     """numerator of Eq. (112) of ISTF, with simpson integration"""
-    assert type(i) == int, 'zbin_idx must be an integer'
-    niz_unnorm_integrand = pph(zp_bin_grid[i, :], z)
-    niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[i, :])
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    niz_unnorm_integrand = pph(zp_bin_grid[zbin_idx, :], z)
+    niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[zbin_idx, :])
     niz_unnorm_integral *= n(z)
     return niz_unnorm_integral
 
 
-def niz_unnormalized(z, i, pph):
+def niz_unnormalized(z, zbin_idx, pph):
     """
     :param z: float, does not accept an array. Same as above, but with quad_vec
     """
-    assert type(i) == int, 'zbin_idx must be an integer'
-    niz_unnorm = quad_vec(pph, z_edges[i], z_edges[i + 1], args=z)[0]
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    niz_unnorm = quad_vec(pph, z_edges[zbin_idx], z_edges[zbin_idx + 1], args=z)[0]
     niz_unnorm *= n(z)
     return niz_unnorm
 
 
-def niz_normalization(i, niz_unnormalized_func, pph):
-    assert type(i) == int, 'zbin_idx must be an integer'
-    return quad(niz_unnormalized_func, z_edges[0], z_edges[-1], args=(i, pph))[0]
+def niz_normalization(zbin_idx, niz_unnormalized_func, pph):
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    return quad(niz_unnormalized_func, z_edges[0], z_edges[-1], args=(zbin_idx, pph))[0]
 
 
 @ray.remote
@@ -254,6 +275,7 @@ def mean_z(zbin_idx, pph):
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
     return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[0], z_edges[-1])[0]
 
+
 @ray.remote
 def mean_z_simps(zbin_idx, pph):
     """mean redshift of the galaxies in the zbin_idx-th bin; faster version with simpson integration"""
@@ -278,40 +300,34 @@ niz_shift = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
-# ! test parallel:
-start_time = time.time()
-for zbin_idx in range(2):
-    niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
-    niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
-print('parallel time: ', time.time() - start_time)
-
-start_time = time.time()
-for zbin_idx in range(2):
-    niz_fid[zbin_idx, :] = niz_normalized(z_grid, zbin_idx, pph_fid)
-    niz_true[zbin_idx, :] = niz_normalized(z_grid, zbin_idx, pph_true)
-print('serial time: ', time.time() - start_time)
-# ! end test parallel
-
 for zbin_idx in range(zbins):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
-    zmean_fid[zbin_idx] = ray.get(mean_z_simps_ray.remote(zbin_idx, pph_fid))
-    zmean_tot[zbin_idx] = ray.get(mean_z_simps_ray.remote(zbin_idx, pph_true))
+    zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
+    zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
-delta_z = zmean_tot - zmean_fid
+delta_z = zmean_tot - zmean_fid  # ! free to vary, zbins additional parameters
 for zbin_idx in range(zbins):
     niz_shift[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
 
 plt.figure()
+linestyles = ['-', '--', ':']
+linestyle_labels = ['fiducial', 'shifted', 'zmean']
 for zbin_idx in range(zbins):
-    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid', color=colors[zbin_idx])
-    # plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true', color=colors[zbin_idx], ls='--')
-    plt.plot(z_grid, niz_shift[zbin_idx, :], label='niz_shift', color=colors[zbin_idx], ls='--')
-    plt.axvline(zmean_fid[zbin_idx], color=colors[zbin_idx], linestyle='dotted', label='zmean_fid')
-    plt.axvline(zmean_tot[zbin_idx], color=colors[zbin_idx], linestyle='dotted', label='zmean_tot')
-plt.legend()
+    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid', color=colors[zbin_idx], ls=linestyles[0])
+    # plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true', color=colors[zbin_idx], ls=linestyles[1])
+    plt.plot(z_grid, niz_shift[zbin_idx, :], label='niz_shift', color=colors[zbin_idx], ls=linestyles[1])
+    plt.axvline(zmean_fid[zbin_idx], color=colors[zbin_idx], ls=linestyles[2])
+    plt.axvline(zmean_tot[zbin_idx], color=colors[zbin_idx], ls=linestyles[2])
 
-print('******* done *******')
+dummy_lines = []
+for i in range(len(linestyles)):
+    dummy_lines.append(plt.plot([], [], c="black", ls=linestyles[i])[0])
+
+linestyles_legend = plt.legend(dummy_lines, linestyle_labels)
+plt.gca().add_artist(linestyles_legend)
+
+print(f'******* done in {(time.perf_counter() - start):.2f} s *******')
 
 assert 1 > 2
 
