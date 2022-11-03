@@ -6,6 +6,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import quadpy
+from matplotlib import cm
 from mpire import WorkerPool
 from numba import njit
 from scipy.integrate import quad, quad_vec, simpson, dblquad, simps
@@ -54,13 +55,13 @@ z_mean = (z_plus + z_minus) / 2
 z_min = z_edges[0]
 z_max = z_edges[-1]
 
-omega_out = ISTF.photoz_pdf['f_out']
-sigma_in = ISTF.photoz_pdf['sigma_b']
+omega_out = ISTF.photoz_pdf['f_out']  # ! can be varied
+sigma_in = ISTF.photoz_pdf['sigma_b']  # ! can be varied
 sigma_out = ISTF.photoz_pdf['sigma_o']
 c_in = ISTF.photoz_pdf['c_b']
 c_out = ISTF.photoz_pdf['c_o']
 z_in = ISTF.photoz_pdf['z_b']
-z_out = ISTF.photoz_pdf['z_o']
+z_out = ISTF.photoz_pdf['z_o']  # ! can be varied
 
 n_gal = ISTF.other_survey_specs['n_gal']
 
@@ -177,7 +178,7 @@ for i in range(zbins):  # remove all the points below the bin edge
 
 def niz_unnormalized_simps(z, i, pph):
     """numerator of Eq. (112) of ISTF, with simpson integration"""
-    assert type(i) == int, 'i must be an integer'
+    assert type(i) == int, 'zbin_idx must be an integer'
     niz_unnorm_integrand = pph(zp_bin_grid[i, :], z)
     niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[i, :])
     niz_unnorm_integral *= n(z)
@@ -188,27 +189,27 @@ def niz_unnormalized(z, i, pph):
     """
     :param z: float, does not accept an array. Same as above, but with quad_vec
     """
-    assert type(i) == int, 'i must be an integer'
+    assert type(i) == int, 'zbin_idx must be an integer'
     niz_unnorm = quad_vec(pph, z_edges[i], z_edges[i + 1], args=z)[0]
     niz_unnorm *= n(z)
     return niz_unnorm
 
 
 def niz_normalization(i, niz_unnormalized_func, pph):
-    assert type(i) == int, 'i must be an integer'
+    assert type(i) == int, 'zbin_idx must be an integer'
     return quad(niz_unnormalized_func, z_edges[0], z_edges[-1], args=(i, pph))[0]
 
 
-def niz_normalized(z, i, pph):
+def niz_normalized(z, zbin_idx, pph):
     """this is a wrapper function which normalizes the result. The if-else is needed not to compute the normalization
     for each z, but only once for each zbin_idx"""
 
     if type(z) == float or type(z) == int:
-        return niz_unnormalized(z, i, pph) / niz_normalization(i, niz_unnormalized, pph)
+        return niz_unnormalized(z, zbin_idx, pph) / niz_normalization(zbin_idx, niz_unnormalized, pph)
 
     elif type(z) == np.ndarray:
-        niz_unnormalized_arr = np.asarray([niz_unnormalized(z_value, i, pph) for z_value in z])
-        return niz_unnormalized_arr / niz_normalization(i, niz_unnormalized, pph)
+        niz_unnormalized_arr = np.asarray([niz_unnormalized(z_value, zbin_idx, pph) for z_value in z])
+        return niz_unnormalized_arr / niz_normalization(zbin_idx, niz_unnormalized, pph)
 
     else:
         raise TypeError('z must be a float, an int or a numpy array')
@@ -226,16 +227,32 @@ def niz_unnorm_stef(z, i):
     return result
 
 
-z_num = 300
-z_grid = np.linspace(z_min, z_max, z_num)
-zbin_idx = 1
+def mean_z(zbin_idx, pph):
+    """mean redshift of the galaxies in the zbin_idx-th bin"""
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[zbin_idx], z_edges[zbin_idx + 1])[0]
 
-niz_fid = niz_normalized(z_grid, zbin_idx, pph_fid)
-niz_tot = niz_normalized(z_grid, zbin_idx, pph_tot)
+
+z_num = 200
+z_grid = np.linspace(z_min, z_max, z_num)
+
+# linspace from rainbow colormap
+colors = np.linspace(0, 1, zbins)
+cmap = cm.get_cmap('rainbow')
+colors = cmap(colors)
+
+
 
 plt.figure()
-plt.plot(z_grid, niz_fid, label='niz_fid')
-plt.plot(z_grid, niz_tot, label='niz_tot')
+for zbin_idx in range(zbins):
+    niz_fid = niz_normalized(z_grid, zbin_idx, pph_fid)
+    niz_tot = niz_normalized(z_grid, zbin_idx, pph_tot)
+    z_mean = mean_z(zbin_idx, pph_fid)
+
+    plt.plot(z_grid, niz_fid, label='niz_fid', color=colors[zbin_idx])
+    plt.plot(z_grid, niz_tot, label='niz_tot', color=colors[zbin_idx], ls='--')
+    plt.axvline(z_mean, color=colors[zbin_idx], linestyle='dotted', label='z_mean')
+
 plt.legend()
 
 assert 1 > 2
