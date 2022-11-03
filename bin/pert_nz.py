@@ -4,6 +4,7 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+import time
 import numpy as np
 import quadpy
 from matplotlib import cm
@@ -134,7 +135,7 @@ def pph_pert(z_p, z):
 
 
 @njit
-def pph_tot(z_p, z, omega_fid=omega_fid_pert):
+def pph_true(z_p, z, omega_fid=omega_fid_pert):
     return omega_fid * pph_fid(z_p, z) + (1 - omega_fid) * pph_pert(z_p, z)
 
 
@@ -159,7 +160,7 @@ def n(z):
 
 
 # intantiate a grid for simpson integration which passes through all the bin edges (which are the integration limits!)
-zp_points = 2_000
+zp_points = 500
 zp_num_per_bin = int(zp_points / zbins)
 zp_grid = np.empty(0)
 zp_bin_grid = np.zeros((zbins, zp_num_per_bin))
@@ -233,27 +234,45 @@ def mean_z(zbin_idx, pph):
     return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[0], z_edges[-1])[0]
 
 
+def mean_z_simps(zbin_idx, pph):
+    """mean redshift of the galaxies in the zbin_idx-th bin; faster version with simpson integration"""
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    z_grid = np.linspace(z_edges[0], z_edges[-1], 500)
+    integrand = z_grid * niz_normalized(z_grid, zbin_idx, pph)
+    return simps(y=integrand, x=z_grid)
+
+
+# time niz_unnormalized vs niz_unnormalized_simps
+
 z_num = 200
 z_grid = np.linspace(z_min, z_max, z_num)
 
 # linspace from rainbow colormap
 colors = np.linspace(0, 1, zbins)
-cmap = cm.get_cmap('rainbow')
-colors = cmap(colors)
+colors = cm.get_cmap('rainbow')(colors)
 
+niz_fid = np.zeros((zbins, z_num))
+niz_true = np.zeros((zbins, z_num))
+zmean_fid = np.zeros(zbins)
+zmean_tot = np.zeros(zbins)
 
+for zbin_idx in range(zbins):
+    niz_fid[zbin_idx, :] = niz_normalized(z_grid, zbin_idx, pph_fid)
+    niz_true[zbin_idx, :] = niz_normalized(z_grid, zbin_idx, pph_true)
+    zmean_fid[zbin_idx] = mean_z_simps(zbin_idx, pph_fid)
+    zmean_tot[zbin_idx] = mean_z_simps(zbin_idx, pph_true)
+
+delta_z = zmean_tot - zmean_fid
 
 plt.figure()
 for zbin_idx in range(zbins):
-    niz_fid = niz_normalized(z_grid, zbin_idx, pph_fid)
-    niz_tot = niz_normalized(z_grid, zbin_idx, pph_tot)
-    z_mean = mean_z(zbin_idx, pph_fid)
-
-    plt.plot(z_grid, niz_fid, label='niz_fid', color=colors[zbin_idx])
-    plt.plot(z_grid, niz_tot, label='niz_tot', color=colors[zbin_idx], ls='--')
-    plt.axvline(z_mean, color=colors[zbin_idx], linestyle='dotted', label='z_mean')
-
+    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid', color=colors[zbin_idx])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true', color=colors[zbin_idx], ls='--')
+    plt.axvline(zmean_fid[zbin_idx], color=colors[zbin_idx], linestyle='dotted', label='zmean_fid')
+    plt.axvline(zmean_tot[zbin_idx], color=colors[zbin_idx], linestyle='dotted', label='zmean_tot')
 plt.legend()
+
+print('******* done *******')
 
 assert 1 > 2
 
