@@ -107,7 +107,9 @@ def sigma_n(z_minus_Case, z_plus_case, sigma_in):
 zparam_pert = z_case(z_minus_pert, z_plus_pert)
 sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
 z_minus_out = - (sigma_in * z_out + sigma_out * z_in) / (sigma_out + sigma_in)
-z_plus_out = (sigma_in * z_out - sigma_out * z_in) / (sigma_out - sigma_in)  # ! is this correct? the denom blows up
+
+
+# z_plus_out = (sigma_in * z_out - sigma_out * z_in) / (sigma_out - sigma_in)  # ! is this correct? the denom blows up
 
 
 # n_bar = np.genfromtxt("%s/output/n_bar.txt" % project_path)
@@ -335,7 +337,7 @@ colors = cm.get_cmap('rainbow')(colors)
 
 niz_fid = np.zeros((zbins, z_num))
 niz_true = np.zeros((zbins, z_num))
-niz_shift = np.zeros((zbins, z_num))
+niz_shifted = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
@@ -347,24 +349,32 @@ for zbin_idx in range(zbins):
 
 delta_z = zmean_tot - zmean_fid  # ! free to vary, zbins additional parameters
 for zbin_idx in range(zbins):
-    niz_shift[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
+    niz_shifted[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
 
 plt.figure()
 linestyles = ['-', '--', ':']
-linestyle_labels = ['fiducial', 'shifted', 'zmean']
+
+
+label_switch = 1  # this is to display the labels only for the first iteration
 for zbin_idx in range(zbins):
-    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid', color=colors[zbin_idx], ls=linestyles[0])
-    # plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true', color=colors[zbin_idx], ls=linestyles[1])
-    plt.plot(z_grid, niz_shift[zbin_idx, :], label='niz_shift', color=colors[zbin_idx], ls=linestyles[1])
-    plt.axvline(zmean_fid[zbin_idx], color=colors[zbin_idx], ls=linestyles[2])
-    plt.axvline(zmean_tot[zbin_idx], color=colors[zbin_idx], ls=linestyles[2])
+    if zbin_idx != 0:
+        label_switch = 0
+    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid'*label_switch, color=colors[zbin_idx], ls=linestyles[0])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true'*label_switch, color=colors[zbin_idx], ls=linestyles[1])
+    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted'*label_switch, color=colors[zbin_idx], ls=linestyles[1])
+    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid'*label_switch, color=colors[zbin_idx], ls=linestyles[2])
+    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot'*label_switch, color=colors[zbin_idx], ls=linestyles[2])
 
-dummy_lines = []
-for i in range(len(linestyles)):
-    dummy_lines.append(plt.plot([], [], c="black", ls=linestyles[i])[0])
+plt.legend()
 
-linestyles_legend = plt.legend(dummy_lines, linestyle_labels)
-plt.gca().add_artist(linestyles_legend)
+# nicer legend
+# dummy_lines = []
+# linestyle_labels = ['fiducial', 'shifted/true', 'zmean']
+# for i in range(len(linestyles)):
+#     dummy_lines.append(plt.plot([], [], c="black", ls=linestyles[i])[0])
+#
+# linestyles_legend = plt.legend(dummy_lines, linestyle_labels)
+# plt.gca().add_artist(linestyles_legend)
 
 print(f'******* done in {(time.perf_counter() - start):.2f} s *******')
 
