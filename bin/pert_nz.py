@@ -104,12 +104,17 @@ def sigma_n(z_minus_Case, z_plus_case, sigma_in):
     return sigma_in * (1 - ratio) / (1 + ratio)
 
 
+def z_minus_func(sigma_in, z_in, sigma_case, z_case):
+    return -(sigma_in * z_case + sigma_case * z_in) / (sigma_case + sigma_in)
+
+def z_plus_func(sigma_in, z_in, sigma_case, z_case):
+    return (sigma_in * z_case - sigma_case * z_in) / (sigma_case - sigma_in)
+
+
 zparam_pert = z_case(z_minus_pert, z_plus_pert)
 sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
-z_minus_out = - (sigma_in * z_out + sigma_out * z_in) / (sigma_out + sigma_in)
 
 
-# z_plus_out = (sigma_in * z_out - sigma_out * z_in) / (sigma_out - sigma_in)  # ! is this correct? the denom blows up
 
 
 # n_bar = np.genfromtxt("%s/output/n_bar.txt" % project_path)
@@ -151,7 +156,7 @@ def pph_true(z_p, z, omega_fid=omega_fid_pert):
 ##################################################### P functions ######################################################
 
 @njit
-def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in, z_in, sigma_in_equals_sigma_out):
+def P(z_p, z, zbin_idx, z_case, sigma_case, sigma_in, z_in, sigma_in_equals_sigma_out):
     """ parameters named with ..._case shpuld be _out, _n or _eff"""
     assert type(zbin_idx) == int, "zbin_idx must be an integer"
     assert type(sigma_in_equals_sigma_out) == bool, "sigma_in_equals_out must be a boolean"
@@ -159,8 +164,6 @@ def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in,
     if sigma_in_equals_sigma_out:
 
         # I don't need these parameters in this case
-        assert z_minus_case is None, 'the function does not need the z_minus_case parameter if sigma_in equals sigma_out'
-        assert z_plus_case is None, 'the function does not need the z_plus_case parameter if sigma_in equals sigma_out'
         assert sigma_case is None, 'the function does not need the sigma_case parameter if sigma_in equals sigma_out'
         # assert sigma_in is None, 'the function does not need the sigma_in parameter if sigma_in equals sigma_out'  # let's pass the parameter to have a check
         assert np.allclose(sigma_in, sigma_case, atol=0, rtol=1e-4), 'sigma_in must be equal to sigma_case'
@@ -168,6 +171,9 @@ def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in,
         return (z_in[zbin_idx] - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in[zbin_idx] + z_case[zbin_idx])
 
     else:
+
+        z_minus_case = z_minus_func(sigma_in, z_in, sigma_case, z_case)
+        z_plus_case = z_plus_func(sigma_in, z_in, sigma_case, z_case)
 
         # I don't need these parameters in this case
         assert z_case is None, 'the function does not need the z_case parameter if sigma_in is not equal to sigma_out'
@@ -183,13 +189,13 @@ def P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case, sigma_in,
 @njit
 def P_eff(z_p, z, zbin_idx):
     # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
-    return P(z_p, z, zbin_idx, None, z_minus_eff, z_plus_eff, sigma_case, sigma_in, z_in,
+    return P(z_p, z, zbin_idx, None, sigma_eff, sigma_in, z_in,
              sigma_in_equals_sigma_out=False)
 
 
 @njit
 def P_out(z_p, z, zbin_idx):
-    return P(z_p, z, zbin_idx, None, z_minus_out, z_plus_out, sigma_out, sigma_in, z_in,
+    return P(z_p, z, zbin_idx, None, sigma_out, sigma_in, z_in,
              sigma_in_equals_sigma_out=True)
 
 
@@ -354,16 +360,16 @@ for zbin_idx in range(zbins):
 plt.figure()
 linestyles = ['-', '--', ':']
 
-
 label_switch = 1  # this is to display the labels only for the first iteration
 for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
-    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid'*label_switch, color=colors[zbin_idx], ls=linestyles[0])
-    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true'*label_switch, color=colors[zbin_idx], ls=linestyles[1])
-    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted'*label_switch, color=colors[zbin_idx], ls=linestyles[1])
-    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid'*label_switch, color=colors[zbin_idx], ls=linestyles[2])
-    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot'*label_switch, color=colors[zbin_idx], ls=linestyles[2])
+    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=linestyles[0])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=linestyles[1])
+    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx],
+             ls=linestyles[1])
+    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=linestyles[2])
+    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=linestyles[2])
 
 plt.legend()
 
