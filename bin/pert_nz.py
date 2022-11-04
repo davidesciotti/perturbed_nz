@@ -41,7 +41,7 @@ start = time.perf_counter()
 ###############################################################################
 
 script_start = time.perf_counter()
-c_lightspeed = ISTF.constants['c']
+c_lightspeed = ISTF.constants['c_case']
 
 H0 = ISTF.primary['h_0'] * 100
 Om0 = ISTF.primary['Om_m0']
@@ -85,7 +85,7 @@ nu_pert = rng.uniform(-1, 1, N_pert)
 nu_pert /= np.sum(nu_pert)  # normalize the weights to 1
 z_minus_pert = rng.uniform(-0.15, 0.15, N_pert)
 z_plus_pert = rng.uniform(-0.15, 0.15, N_pert)
-omega_fid_pert = rng.uniform(0.69, 0.99)
+omega_fid = rng.uniform(0.69, 0.99)  # ! should this be called omega_fid_pert?
 c_pert = np.ones((N_pert,))
 nu_out = np.ones((N_pert,))  # weights for Eq. (7)
 
@@ -107,14 +107,13 @@ def sigma_n(z_minus_Case, z_plus_case, sigma_in):
 def z_minus_func(sigma_in, z_in, sigma_case, z_case):
     return -(sigma_in * z_case + sigma_case * z_in) / (sigma_case + sigma_in)
 
+
 def z_plus_func(sigma_in, z_in, sigma_case, z_case):
     return (sigma_in * z_case - sigma_case * z_in) / (sigma_case - sigma_in)
 
 
 zparam_pert = z_case(z_minus_pert, z_plus_pert)
 sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
-
-
 
 
 # n_bar = np.genfromtxt("%s/output/n_bar.txt" % project_path)
@@ -124,21 +123,21 @@ sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
 
 
 @njit
-def base_gaussian(z_p, z, nu, c, z_param, sigma):
+def base_gaussian(z_p, z, nu_case, c_case, z_case, sigma_case):
     """one of the terms used int the sum of gaussians
     the name zparam is not the best, but I cannot smply sue z as it is a variable in the function.
-    note: the weights (nu) are included in the function! this could change in the future.
+    note: the weights (nu_case) are included in the function! this could change in the future.
     """
-    result = (nu * c) / (sqrt2pi * sigma * (1 + z)) * np.exp(-0.5 * ((z - c * z_p - z_param) / (sigma * (1 + z))) ** 2)
+    result = (nu_case * c_case) / (sqrt2pi * sigma_case * (1 + z)) * np.exp(-0.5 * ((z - c_case * z_p - z_case) / (sigma_case * (1 + z))) ** 2)
     return result
 
 
 @njit
 def pph_fid(z_p, z):
-    """nu is just a weight for the sum of gaussians, in this case it's just
+    """nu_case is just a weight for the sum of gaussians, in this case it's just
      (1 - omega_out) * pph_in + omega_out * pph_out"""
-    result = (1 - omega_out) * base_gaussian(z_p, z, nu=1, c=c_in, z_param=z_in, sigma=sigma_in) + \
-             omega_out * base_gaussian(z_p, z, nu=1, c=c_out, z_param=z_out, sigma=sigma_out)
+    result = (1 - omega_out) * base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in) + \
+             omega_out * base_gaussian(z_p, z, nu_case=1, c_case=c_out, z_case=z_out, sigma_case=sigma_out)
     return result
 
 
@@ -149,7 +148,7 @@ def pph_pert(z_p, z):
 
 
 @njit
-def pph_true(z_p, z, omega_fid=omega_fid_pert):
+def pph_true(z_p, z, omega_fid=omega_fid):
     return omega_fid * pph_fid(z_p, z) + (1 - omega_fid) * pph_pert(z_p, z)
 
 
@@ -201,9 +200,9 @@ def P_out(z_p, z, zbin_idx):
 
 ##################################################### R functions ######################################################
 @njit
-def R(z_p, z, zbin_idx, sigma_case, nu_case, z_case, z_minus_case, z_plus_case, sigma_in, z_in,
+def R(z_p, z, zbin_idx, sigma_case, nu_case, z_case, sigma_in, z_in,
       sigma_in_equals_sigma_out):
-    P_shortened = P(z_p, z, zbin_idx, z_case, z_minus_case, z_plus_case, sigma_case,
+    P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case,
                     sigma_in, z_in, sigma_in_equals_sigma_out)
     result = nu_case[zbin_idx] * sigma_in[zbin_idx] / sigma_case[zbin_idx] * np.exp(
         - P_shortened / (2 * (sigma_in[zbin_idx] * (1 + z)) ** 2))
@@ -212,15 +211,13 @@ def R(z_p, z, zbin_idx, sigma_case, nu_case, z_case, z_minus_case, z_plus_case, 
 
 @njit
 def R_pert(z_p, z, zbin_idx):
-    to_sum = [R(z_p, z, zbin_idx, sigma_pert, nu_n, z_pert, z_minus_pert, z_plus_pert, sigma_in, z_in,
-                sigma_in_equals_sigma_out) for nu_n in nu_pert]
+    to_sum = [R(z_p, z, zbin_idx, sigma_pert, nu_n, z_pert, sigma_in, z_in, sigma_in_equals_sigma_out=boh) for nu_n in nu_pert]
     return np.sum(to_sum)
 
 
 @njit
 def R_out(z_p, z, zbin_idx):
-    return R(z_p, z, zbin_idx, sigma_out, nu_out, z_out, z_minus_out, z_plus_out, sigma_in, z_in,
-             sigma_in_equals_sigma_out=True)
+    return R(z_p, z, zbin_idx, sigma_out, nu_out, z_out, sigma_in, z_in, sigma_in_equals_sigma_out=True)
 
 
 @njit
@@ -332,6 +329,11 @@ def mean_z_simps(zbin_idx, pph):
     return simps(y=integrand, x=z_grid)
 
 
+# check: construct niz_true using R and P, that is, implement Eq. (5)
+integrand = 1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) + (1 - omega_fid) / (
+        (1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx) * \
+            base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
+
 # time niz_unnormalized vs niz_unnormalized_simps
 
 z_num = 200
@@ -377,7 +379,7 @@ plt.legend()
 # dummy_lines = []
 # linestyle_labels = ['fiducial', 'shifted/true', 'zmean']
 # for i in range(len(linestyles)):
-#     dummy_lines.append(plt.plot([], [], c="black", ls=linestyles[i])[0])
+#     dummy_lines.append(plt.plot([], [], c_case="black", ls=linestyles[i])[0])
 #
 # linestyles_legend = plt.legend(dummy_lines, linestyle_labels)
 # plt.gca().add_artist(linestyles_legend)
@@ -389,7 +391,7 @@ assert 1 > 2
 z_p = 0.2
 pph_pert_list = [pph_pert(z_p, z) for z in z_grid]
 pph_fid_list = [pph_fid(z_p, z) for z in z_grid]
-pph_tot_list = [pph_tot(z_p, z, omega_fid_pert) for z in z_grid]
+pph_tot_list = [pph_tot(z_p, z, omega_fid) for z in z_grid]
 pph_pert_nosum_list = [base_gaussian(z_p, z, nu_pert, c_pert, zparam_pert, sigma_pert) for z in z_grid]
 
 plt.figure()
