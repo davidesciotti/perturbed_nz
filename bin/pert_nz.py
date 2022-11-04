@@ -41,7 +41,7 @@ start = time.perf_counter()
 ###############################################################################
 
 script_start = time.perf_counter()
-c_lightspeed = ISTF.constants['c_case']
+c_lightspeed = ISTF.constants['c']
 
 H0 = ISTF.primary['h_0'] * 100
 Om0 = ISTF.primary['Om_m0']
@@ -60,12 +60,14 @@ z_mean = (z_plus + z_minus) / 2
 z_min = z_edges[0]
 z_max = z_edges[-1]
 
+
+N_pert = 20
 omega_out = ISTF.photoz_pdf['f_out']  # ! can be varied
 sigma_in = ISTF.photoz_pdf['sigma_b']  # ! can be varied
 sigma_out = ISTF.photoz_pdf['sigma_o']
 c_in = ISTF.photoz_pdf['c_b']
 c_out = ISTF.photoz_pdf['c_o']
-z_in = ISTF.photoz_pdf['z_b']
+z_in = ISTF.photoz_pdf['z_b']*np.ones((N_pert,))
 z_out = ISTF.photoz_pdf['z_o']  # ! can be varied
 
 n_gal = ISTF.other_survey_specs['n_gal']
@@ -79,7 +81,6 @@ sqrt2 = np.sqrt(2)
 sqrt2pi = np.sqrt(2 * np.pi)
 
 # various parameters for the perturbed photo-z PDF
-N_pert = 20
 rng = np.random.default_rng()
 nu_pert = rng.uniform(-1, 1, N_pert)
 nu_pert /= np.sum(nu_pert)  # normalize the weights to 1
@@ -95,26 +96,30 @@ nu_out = np.ones((N_pert,))  # weights for Eq. (7)
 
 # a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
 # _case should be _out, _n or _eff
-def z_case(z_minus_case, z_plus_case):
+@njit
+def z_case_func(z_minus_case, z_plus_case):
     return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
 
 
-def sigma_case(z_minus_case, z_plus_case, sigma_in):
+@njit
+def sigma_case_func(z_minus_case, z_plus_case, sigma_in):
     ratio = z_minus_case / z_plus_case
     return sigma_in * (1 - ratio) / (1 + ratio)
 
 
 # the opposite: functions to go from (z_case, sigma_case) to (z_minus_case, z_plus_case)
+@njit
 def z_minus_case_func(sigma_in, z_in, sigma_case, z_case):
     return -(sigma_in * z_case + sigma_case * z_in) / (sigma_case + sigma_in)
 
 
+@njit
 def z_plus_case_func(sigma_in, z_in, sigma_case, z_case):
     return (sigma_in * z_case - sigma_case * z_in) / (sigma_case - sigma_in)
 
 
-z_pert = z_case(z_minus_pert, z_plus_pert)
-sigma_pert = sigma_case(z_minus_pert, z_plus_pert, sigma_in)
+z_pert = z_case_func(z_minus_pert, z_plus_pert)
+sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, sigma_in)
 
 
 # and maybe
@@ -123,6 +128,12 @@ sigma_pert = sigma_case(z_minus_pert, z_plus_pert, sigma_in)
 
 
 ####################################### function definition
+
+
+@njit
+def n(z):
+    result = (z / z_0) ** 2 * np.exp(-(z / z_0) ** 1.5)
+    return result
 
 
 @njit
@@ -158,7 +169,7 @@ def pph_true(z_p, z, omega_fid=omega_fid):
 
 ##################################################### P functions ######################################################
 
-@njit
+# @njit
 def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     """ parameters named with ..._case shpuld be _out, _n or _eff"""
     assert type(zbin_idx) == int, "zbin_idx must be an integer"
@@ -185,24 +196,24 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
 
 
 # these are just convenience wrapper functions
-@njit
+# @njit
 def P_eff(z_p, z, zbin_idx):
     # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
     return P(z_p, z, zbin_idx, z_eff, sigma_eff, z_in, sigma_in)
 
 
-@njit
+# @njit
 def P_out(z_p, z, zbin_idx):
     return P(z_p, z, zbin_idx, z_out, sigma_out, z_in, sigma_in)
 
 
-@njit
+# @njit
 def P_pert(z_p, z, zbin_idx):
     return P(z_p, z, zbin_idx, z_pert, sigma_pert, z_in, sigma_in)
 
 
 ##################################################### R functions ######################################################
-@njit
+# @njit
 def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)
 
@@ -211,21 +222,15 @@ def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     return result
 
 
-@njit
+# @njit
 def R_pert(z_p, z, zbin_idx):
     to_sum = [R(z_p, z, zbin_idx, nu_n, z_pert, sigma_pert, z_in, sigma_in) for nu_n in nu_pert]
     return np.sum(to_sum)
 
 
-@njit
+# @njit
 def R_out(z_p, z, zbin_idx):
     return R(z_p, z, zbin_idx, nu_out, z_out, sigma_out, z_in, sigma_in)
-
-
-@njit
-def n(z):
-    result = (z / z_0) ** 2 * np.exp(-(z / z_0) ** 1.5)
-    return result
 
 
 # define a grid passing through all the z_edges points, to have exact integration limits
@@ -332,11 +337,18 @@ def mean_z_simps(zbin_idx, pph):
 
 
 # check: construct niz_true using R and P, that is, implement Eq. (5)
-integrand = 1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) + (1 - omega_fid) / (
-        (1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx) * \
-            base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
+# TODO make this function moore generic and/or use simps?
+def integrand(z_p, z, zbin_idx):
+    integrand = 1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) + (1 - omega_fid) / \
+                ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx) * \
+                base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
+    return integrand
 
-# time niz_unnormalized vs niz_unnormalized_simps
+
+@ray.remote
+def niz_true_RP_ray(z, zbin_idx):
+    return omega_fid * (1 - omega_out) * n(z) * quad_vec(integrand, z_min, z_max, args=(z, zbin_idx))[0]
+
 
 z_num = 200
 z_grid = np.linspace(z_min, z_max, z_num)
@@ -347,6 +359,7 @@ colors = cm.get_cmap('rainbow')(colors)
 
 niz_fid = np.zeros((zbins, z_num))
 niz_true = np.zeros((zbins, z_num))
+niz_true_RP = np.zeros((zbins, z_num))
 niz_shifted = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
@@ -354,6 +367,7 @@ zmean_tot = np.zeros(zbins)
 for zbin_idx in range(zbins):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
+    niz_true_RP[zbin_idx, :] = ray.get(niz_true_RP_ray.remote(z_grid, zbin_idx))
     zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
     zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
