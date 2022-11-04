@@ -67,7 +67,7 @@ sigma_in = ISTF.photoz_pdf['sigma_b']  # ! can be varied
 sigma_out = ISTF.photoz_pdf['sigma_o']
 c_in = ISTF.photoz_pdf['c_b']
 c_out = ISTF.photoz_pdf['c_o']
-z_in = ISTF.photoz_pdf['z_b']*np.ones((N_pert,))
+z_in = ISTF.photoz_pdf['z_b']
 z_out = ISTF.photoz_pdf['z_o']  # ! can be varied
 
 n_gal = ISTF.other_survey_specs['n_gal']
@@ -177,7 +177,7 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     if sigma_case == sigma_in:
 
         # I don't need these parameters in this case
-        return (z_in[zbin_idx] - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in[zbin_idx] + z_case[zbin_idx])
+        return (z_in - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in + z_case[zbin_idx])
 
     else:
         print('sigma_case, sigma_in = ', sigma_case, sigma_in)
