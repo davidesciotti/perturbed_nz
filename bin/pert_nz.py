@@ -99,25 +99,28 @@ def z_case(z_minus_case, z_plus_case):
     return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
 
 
-def sigma_n(z_minus_Case, z_plus_case, sigma_in):
-    ratio = z_minus_Case / z_plus_case
+def sigma_case(z_minus_case, z_plus_case, sigma_in):
+    ratio = z_minus_case / z_plus_case
     return sigma_in * (1 - ratio) / (1 + ratio)
 
 
-def z_minus_func(sigma_in, z_in, sigma_case, z_case):
+# the opposite: functions to go from (z_case, sigma_case) to (z_minus_case, z_plus_case)
+def z_minus_case_func(sigma_in, z_in, sigma_case, z_case):
     return -(sigma_in * z_case + sigma_case * z_in) / (sigma_case + sigma_in)
 
 
-def z_plus_func(sigma_in, z_in, sigma_case, z_case):
+def z_plus_case_func(sigma_in, z_in, sigma_case, z_case):
     return (sigma_in * z_case - sigma_case * z_in) / (sigma_case - sigma_in)
 
 
-zparam_pert = z_case(z_minus_pert, z_plus_pert)
-sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
+z_pert = z_case(z_minus_pert, z_plus_pert)
+sigma_pert = sigma_case(z_minus_pert, z_plus_pert, sigma_in)
 
 
-# n_bar = np.genfromtxt("%s/output/n_bar.txt" % project_path)
-# lumin_ratio = np.genfromtxt("%s/input/scaledmeanlum-E2Sa_EXTRAPOLATED.txt" % project_path)
+# and maybe
+# z_eff = z_case(z_minus_eff, z_plus_eff)
+# sigma_eff = sigma_case(z_minus_eff, z_plus_eff, sigma_in)
+
 
 ####################################### function definition
 
@@ -125,10 +128,11 @@ sigma_pert = sigma_n(z_minus_pert, z_plus_pert, sigma_in)
 @njit
 def base_gaussian(z_p, z, nu_case, c_case, z_case, sigma_case):
     """one of the terms used int the sum of gaussians
-    the name zparam is not the best, but I cannot smply sue z as it is a variable in the function.
+    in this function, _case can be _out, _n or _eff or also _in
     note: the weights (nu_case) are included in the function! this could change in the future.
     """
-    result = (nu_case * c_case) / (sqrt2pi * sigma_case * (1 + z)) * np.exp(-0.5 * ((z - c_case * z_p - z_case) / (sigma_case * (1 + z))) ** 2)
+    result = (nu_case * c_case) / (sqrt2pi * sigma_case * (1 + z)) * np.exp(
+        -0.5 * ((z - c_case * z_p - z_case) / (sigma_case * (1 + z))) ** 2)
     return result
 
 
@@ -143,7 +147,7 @@ def pph_fid(z_p, z):
 
 @njit
 def pph_pert(z_p, z):
-    result = base_gaussian(z_p, z, nu_pert, c_pert, zparam_pert, sigma_pert)
+    result = base_gaussian(z_p, z, nu_pert, c_pert, z_pert, sigma_pert)
     return np.sum(result)
 
 
@@ -155,24 +159,20 @@ def pph_true(z_p, z, omega_fid=omega_fid):
 ##################################################### P functions ######################################################
 
 @njit
-def P(z_p, z, zbin_idx, z_case, sigma_case, sigma_in, z_in, sigma_in_equals_sigma_out):
+def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     """ parameters named with ..._case shpuld be _out, _n or _eff"""
     assert type(zbin_idx) == int, "zbin_idx must be an integer"
-    assert type(sigma_in_equals_sigma_out) == bool, "sigma_in_equals_out must be a boolean"
 
-    if sigma_in_equals_sigma_out:
+    if sigma_case == sigma_in:
 
         # I don't need these parameters in this case
-        assert sigma_case is None, 'the function does not need the sigma_case parameter if sigma_in equals sigma_out'
-        # assert sigma_in is None, 'the function does not need the sigma_in parameter if sigma_in equals sigma_out'  # let's pass the parameter to have a check
-        assert np.allclose(sigma_in, sigma_case, atol=0, rtol=1e-4), 'sigma_in must be equal to sigma_case'
-
         return (z_in[zbin_idx] - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in[zbin_idx] + z_case[zbin_idx])
 
     else:
+        print('sigma_case, sigma_in = ', sigma_case, sigma_in)
 
-        z_minus_case = z_minus_func(sigma_in, z_in, sigma_case, z_case)
-        z_plus_case = z_plus_func(sigma_in, z_in, sigma_case, z_case)
+        z_minus_case = z_minus_case_func(sigma_in, z_in, sigma_case, z_case)
+        z_plus_case = z_plus_case_func(sigma_in, z_in, sigma_case, z_case)
 
         # I don't need these parameters in this case
         assert z_case is None, 'the function does not need the z_case parameter if sigma_in is not equal to sigma_out'
@@ -188,22 +188,24 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, sigma_in, z_in, sigma_in_equals_sigm
 @njit
 def P_eff(z_p, z, zbin_idx):
     # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
-    return P(z_p, z, zbin_idx, None, sigma_eff, sigma_in, z_in,
-             sigma_in_equals_sigma_out=False)
+    return P(z_p, z, zbin_idx, z_eff, sigma_eff, z_in, sigma_in)
 
 
 @njit
 def P_out(z_p, z, zbin_idx):
-    return P(z_p, z, zbin_idx, None, sigma_out, sigma_in, z_in,
-             sigma_in_equals_sigma_out=True)
+    return P(z_p, z, zbin_idx, z_out, sigma_out, z_in, sigma_in)
+
+
+@njit
+def P_pert(z_p, z, zbin_idx):
+    return P(z_p, z, zbin_idx, z_pert, sigma_pert, z_in, sigma_in)
 
 
 ##################################################### R functions ######################################################
 @njit
-def R(z_p, z, zbin_idx, sigma_case, nu_case, z_case, sigma_in, z_in,
-      sigma_in_equals_sigma_out):
-    P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case,
-                    sigma_in, z_in, sigma_in_equals_sigma_out)
+def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
+    P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)
+
     result = nu_case[zbin_idx] * sigma_in[zbin_idx] / sigma_case[zbin_idx] * np.exp(
         - P_shortened / (2 * (sigma_in[zbin_idx] * (1 + z)) ** 2))
     return result
@@ -211,13 +213,13 @@ def R(z_p, z, zbin_idx, sigma_case, nu_case, z_case, sigma_in, z_in,
 
 @njit
 def R_pert(z_p, z, zbin_idx):
-    to_sum = [R(z_p, z, zbin_idx, sigma_pert, nu_n, z_pert, sigma_in, z_in, sigma_in_equals_sigma_out=boh) for nu_n in nu_pert]
+    to_sum = [R(z_p, z, zbin_idx, nu_n, z_pert, sigma_pert, z_in, sigma_in) for nu_n in nu_pert]
     return np.sum(to_sum)
 
 
 @njit
 def R_out(z_p, z, zbin_idx):
-    return R(z_p, z, zbin_idx, sigma_out, nu_out, z_out, sigma_in, z_in, sigma_in_equals_sigma_out=True)
+    return R(z_p, z, zbin_idx, nu_out, z_out, sigma_out, z_in, sigma_in)
 
 
 @njit
@@ -392,7 +394,7 @@ z_p = 0.2
 pph_pert_list = [pph_pert(z_p, z) for z in z_grid]
 pph_fid_list = [pph_fid(z_p, z) for z in z_grid]
 pph_tot_list = [pph_tot(z_p, z, omega_fid) for z in z_grid]
-pph_pert_nosum_list = [base_gaussian(z_p, z, nu_pert, c_pert, zparam_pert, sigma_pert) for z in z_grid]
+pph_pert_nosum_list = [base_gaussian(z_p, z, nu_pert, c_pert, z_pert, sigma_pert) for z in z_grid]
 
 plt.figure()
 plt.plot(z_grid, pph_pert_list, label='pph_pert_list')
