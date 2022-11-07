@@ -95,14 +95,20 @@ nu_out = np.ones(N_pert)  # weights for Eq. (7)
 # a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
 # _case should be _out, _n or _eff
 @njit
-def z_case_func(z_minus_case, z_plus_case):
-    return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
+def z_case_func(z_minus_case, z_plus_case, z_in):
+    # return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
+
+def z_case_func_sympy(z_minus_case, z_plus_case, z_in):
+    # return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
+    return -(z_in * z_minus_case + z_in * z_plus_case + 2 * z_minus_case * z_plus_case) / (
+                2 * z_in + z_minus_case + z_plus_case)  # sympy
 
 
 @njit
-def sigma_case_func(z_minus_case, z_plus_case, sigma_in):
-    ratio = z_minus_case / z_plus_case
-    return sigma_in * (1 - ratio) / (1 + ratio)
+def sigma_case_func(z_minus_case, z_plus_case, z_in, sigma_in):
+    # ratio = z_minus_case / z_plus_case
+    # return sigma_in * (1 - ratio) / (1 + ratio)
+    return -sigma_in * (z_minus_case - z_plus_case) / (2 * z_in + z_minus_case + z_plus_case)  # sympy
 
 
 # the opposite: functions to go from (z_case, sigma_case) to (z_minus_case, z_plus_case)
@@ -116,8 +122,8 @@ def z_plus_case_func(sigma_in, z_in, sigma_case, z_case):
     return (sigma_in * z_case - sigma_case * z_in) / (sigma_case - sigma_in)
 
 
-z_pert = z_case_func(z_minus_pert, z_plus_pert)
-sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, sigma_in)
+z_pert = z_case_func(z_minus_pert, z_plus_pert, z_in)
+sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, z_in, sigma_in)
 
 
 # and maybe
@@ -172,7 +178,7 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     """ parameters named with ..._case shpuld be _out, _n or _eff"""
     assert type(zbin_idx) == int, "zbin_idx must be an integer"
 
-    if np.all(sigma_case == sigma_in):
+    if np.allclose(sigma_case, sigma_in, atol=0, rtol=1e-5):
         return (z_in - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in + z_case[zbin_idx])
 
     else:
@@ -207,6 +213,8 @@ def P_pert(z_p, z, zbin_idx):
 # @njit
 def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
+    # print(np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2)))
+    # print('R:', nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2)))
     result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2))
 
     # check if all elements of result are equal
@@ -214,7 +222,6 @@ def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
         return result[0]
     else:
         return result
-
 
 
 # @njit
@@ -346,7 +353,7 @@ niz_shifted = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
-for zbin_idx in range(2):
+for zbin_idx in range(zbins):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
     niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
@@ -364,16 +371,15 @@ label_switch = 1  # this is to display the labels only for the first iteration
 for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
-    # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
-    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls='-')
     plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
-             ls=lnstl[1])
+             ls='--')
     # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
-    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
-    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    # plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    # plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 
 plt.legend()
-
 
 # nicer legend
 # dummy_lines = []
