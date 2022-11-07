@@ -94,20 +94,18 @@ nu_out = np.ones(N_pert)  # weights for Eq. (7)
 
 # a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
 # _case should be _out, _n or _eff
+
+
 @njit
 def z_case_func(z_minus_case, z_plus_case, z_in):
-    # return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
-
-def z_case_func_sympy(z_minus_case, z_plus_case, z_in):
-    # return -2 * z_minus_case / (1 + z_minus_case / z_plus_case)
     return -(z_in * z_minus_case + z_in * z_plus_case + 2 * z_minus_case * z_plus_case) / (
-                2 * z_in + z_minus_case + z_plus_case)  # sympy
+            2 * z_in + z_minus_case + z_plus_case)  # sympy
+
+
 
 
 @njit
 def sigma_case_func(z_minus_case, z_plus_case, z_in, sigma_in):
-    # ratio = z_minus_case / z_plus_case
-    # return sigma_in * (1 - ratio) / (1 + ratio)
     return -sigma_in * (z_minus_case - z_plus_case) / (2 * z_in + z_minus_case + z_plus_case)  # sympy
 
 
