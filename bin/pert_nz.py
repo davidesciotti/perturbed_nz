@@ -93,20 +93,16 @@ nu_out = np.ones(N_pert)  # weights for Eq. (7)
 # TODO do not redefine functions here! Take as many as you can from wf.py
 
 # a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
-# _case should be _out, _n or _eff
-
-
+# _case should be _out, _n or _eff. These have been obtained by solving the system of equations in the paper (Eq. 9)
 @njit
 def z_case_func(z_minus_case, z_plus_case, z_in):
     return -(z_in * z_minus_case + z_in * z_plus_case + 2 * z_minus_case * z_plus_case) / (
-            2 * z_in + z_minus_case + z_plus_case)  # sympy
-
-
+            2 * z_in + z_minus_case + z_plus_case)
 
 
 @njit
 def sigma_case_func(z_minus_case, z_plus_case, z_in, sigma_in):
-    return -sigma_in * (z_minus_case - z_plus_case) / (2 * z_in + z_minus_case + z_plus_case)  # sympy
+    return -sigma_in * (z_minus_case - z_plus_case) / (2 * z_in + z_minus_case + z_plus_case)
 
 
 # the opposite: functions to go from (z_case, sigma_case) to (z_minus_case, z_plus_case)
@@ -187,6 +183,8 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
 
         result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
                  ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
+        if np.abs(result) > 5:
+            print('inside P:', result, zbin_idx, sigma_case[zbin_idx], sigma_in)
         return result
 
 
@@ -199,7 +197,7 @@ def P_eff(z_p, z, zbin_idx):
 
 # @njit
 def P_out(z_p, z, zbin_idx):
-    return P(z_p, z, zbin_idx, z_out, sigma_out, z_in, sigma_in)
+    return P(z_p, z, zbin_idx, z_out * np.ones(N_pert), sigma_out, z_in, sigma_in)
 
 
 # @njit
@@ -211,9 +209,7 @@ def P_pert(z_p, z, zbin_idx):
 # @njit
 def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
-    # print(np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2)))
-    # print('R:', nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2)))
-    result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2))
+    result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(-0.5 * P_shortened / (sigma_in * (1 + z)) ** 2)
 
     # check if all elements of result are equal
     if np.allclose(result, result[0], atol=0, rtol=1e-5):
@@ -351,7 +347,9 @@ niz_shifted = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
-for zbin_idx in range(zbins):
+# ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these paramters.
+
+for zbin_idx in range(2):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
     niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
@@ -362,14 +360,13 @@ delta_z = zmean_tot - zmean_fid  # ! free to vary, in this case there will be zb
 for zbin_idx in range(zbins):
     niz_shifted[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
 
-plt.figure()
 lnstl = ['-', '--', ':']
-
 label_switch = 1  # this is to display the labels only for the first iteration
-for zbin_idx in range(zbins):
+plt.figure()
+for zbin_idx in range(2):
     if zbin_idx != 0:
         label_switch = 0
-    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
+    # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
     plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls='-')
     plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
              ls='--')
