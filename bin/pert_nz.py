@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import ray
 import time
 import numpy as np
+import logging
 import quadpy
 from matplotlib import cm
 from mpire import WorkerPool
@@ -31,9 +32,7 @@ rcParams = mpl_cfg.mpl_rcParams_dict
 plt.rcParams.update(rcParams)
 matplotlib.use('Qt5Agg')
 
-ray.shutdown()
-ray.init()
-
+ray.init(ignore_reinit_error=True, logging_level=logging.ERROR, dashboard_host='0.0.0.0')
 start = time.perf_counter()
 
 ###############################################################################
@@ -60,7 +59,6 @@ z_mean = (z_plus + z_minus) / 2
 z_min = z_edges[0]
 z_max = z_edges[-1]
 
-
 N_pert = 20
 omega_out = ISTF.photoz_pdf['f_out']  # ! can be varied
 sigma_in = ISTF.photoz_pdf['sigma_b']  # ! can be varied
@@ -81,14 +79,14 @@ sqrt2 = np.sqrt(2)
 sqrt2pi = np.sqrt(2 * np.pi)
 
 # various parameters for the perturbed photo-z PDF
-rng = np.random.default_rng()
+rng = np.random.default_rng(seed=42)
 nu_pert = rng.uniform(-1, 1, N_pert)
 nu_pert /= np.sum(nu_pert)  # normalize the weights to 1
 z_minus_pert = rng.uniform(-0.15, 0.15, N_pert)
 z_plus_pert = rng.uniform(-0.15, 0.15, N_pert)
 omega_fid = rng.uniform(0.69, 0.99)  # ! should this be called omega_fid_pert?
-c_pert = np.ones((N_pert,))
-nu_out = np.ones((N_pert,))  # weights for Eq. (7)
+c_pert = np.ones(N_pert)
+nu_out = np.ones(N_pert)  # weights for Eq. (7)
 
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
@@ -174,24 +172,17 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     """ parameters named with ..._case shpuld be _out, _n or _eff"""
     assert type(zbin_idx) == int, "zbin_idx must be an integer"
 
-    if sigma_case == sigma_in:
-
-        # I don't need these parameters in this case
+    if np.all(sigma_case == sigma_in):
         return (z_in - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in + z_case[zbin_idx])
 
     else:
-        print('sigma_case, sigma_in = ', sigma_case, sigma_in)
-
         z_minus_case = z_minus_case_func(sigma_in, z_in, sigma_case, z_case)
         z_plus_case = z_plus_case_func(sigma_in, z_in, sigma_case, z_case)
 
-        # I don't need these parameters in this case
-        assert z_case is None, 'the function does not need the z_case parameter if sigma_in is not equal to sigma_out'
-        assert z_in is None, 'the function does not need the z_in parameter if sigma_in is not equal to sigma_out'
         assert np.allclose(sigma_in, sigma_case, atol=0, rtol=1e-4) is False, 'sigma_in must not be equal to sigma_case'
 
         result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
-                 ((sigma_case[zbin_idx] / sigma_in[zbin_idx]) ** (-2) - 1)
+                 ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
         return result
 
 
@@ -215,25 +206,27 @@ def P_pert(z_p, z, zbin_idx):
 ##################################################### R functions ######################################################
 # @njit
 def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
-    P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)
+    P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
+    result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(- P_shortened / (2 * (sigma_in * (1 + z)) ** 2))
 
-    result = nu_case[zbin_idx] * sigma_in[zbin_idx] / sigma_case[zbin_idx] * np.exp(
-        - P_shortened / (2 * (sigma_in[zbin_idx] * (1 + z)) ** 2))
-    return result
+    # check if all elements of result are equal
+    if np.allclose(result, result[0], atol=0, rtol=1e-5):
+        return result[0]
+    else:
+        return result
+
 
 
 # @njit
 def R_pert(z_p, z, zbin_idx):
-    to_sum = [R(z_p, z, zbin_idx, nu_n, z_pert, sigma_pert, z_in, sigma_in) for nu_n in nu_pert]
-    return np.sum(to_sum)
+    assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
+    return np.sum(R(z_p, z, zbin_idx, nu_pert, z_pert, sigma_pert, z_in, sigma_in))
 
 
 # @njit
 def R_out(z_p, z, zbin_idx):
-    return R(z_p, z, zbin_idx, nu_out, z_out, sigma_out, z_in, sigma_in)
-
-
-# define a grid passing through all the z_edges points, to have exact integration limits
+    # sigma_out and z_out are scalars, I vectorize them to make the function work with the P function
+    return R(z_p, z, zbin_idx, nu_out, z_out * np.ones(N_pert), sigma_out * np.ones(N_pert), z_in, sigma_in)
 
 
 # intantiate a grid for simpson integration which passes through all the bin edges (which are the integration limits!)
@@ -244,7 +237,7 @@ zp_bin_grid = np.zeros((zbins, zp_num_per_bin))
 for i in range(zbins):
     zp_bin_grid[i, :] = np.linspace(z_edges[i], z_edges[i + 1], zp_num_per_bin)
 
-# alternative way: define a grid, then include the bin edges in the grid to have exact integration limits
+# alternative way
 zp_bin_grid = np.linspace(z_edges[0], z_edges[-1], zp_points)
 zp_bin_grid = np.append(zp_bin_grid, z_edges)  # add bin edges
 zp_bin_grid = np.sort(zp_bin_grid)
@@ -276,22 +269,6 @@ def niz_unnormalized(z, zbin_idx, pph):
 def niz_normalization(zbin_idx, niz_unnormalized_func, pph):
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
     return quad(niz_unnormalized_func, z_edges[0], z_edges[-1], args=(zbin_idx, pph))[0]
-
-
-@ray.remote
-def niz_normalized_ray(z, zbin_idx, pph):  # ! the only difference with the one below is the decorator!
-    """this is a wrapper function which normalizes the result. The if-else is needed not to compute the normalization
-    for each z, but only once for each zbin_idx"""
-
-    if type(z) == float or type(z) == int:
-        return niz_unnormalized(z, zbin_idx, pph) / niz_normalization(zbin_idx, niz_unnormalized, pph)
-
-    elif type(z) == np.ndarray:
-        niz_unnormalized_arr = np.asarray([niz_unnormalized(z_value, zbin_idx, pph) for z_value in z])
-        return niz_unnormalized_arr / niz_normalization(zbin_idx, niz_unnormalized, pph)
-
-    else:
-        raise TypeError('z must be a float, an int or a numpy array')
 
 
 def niz_normalized(z, zbin_idx, pph):
@@ -337,7 +314,7 @@ def mean_z_simps(zbin_idx, pph):
 
 
 # check: construct niz_true using R and P, that is, implement Eq. (5)
-# TODO make this function moore generic and/or use simps?
+# TODO make this function more generic and/or use simps?
 def integrand(z_p, z, zbin_idx):
     integrand = 1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) + (1 - omega_fid) / \
                 ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx) * \
@@ -345,10 +322,15 @@ def integrand(z_p, z, zbin_idx):
     return integrand
 
 
-@ray.remote
-def niz_true_RP_ray(z, zbin_idx):
+def niz_true_RP(z, zbin_idx):
     return omega_fid * (1 - omega_out) * n(z) * quad_vec(integrand, z_min, z_max, args=(z, zbin_idx))[0]
 
+
+# ray versions of the above functions
+niz_true_RP_ray = ray.remote(niz_true_RP)
+niz_normalized_ray = ray.remote(niz_normalized)
+
+########################################################################################################################
 
 z_num = 200
 z_grid = np.linspace(z_min, z_max, z_num)
@@ -359,50 +341,54 @@ colors = cm.get_cmap('rainbow')(colors)
 
 niz_fid = np.zeros((zbins, z_num))
 niz_true = np.zeros((zbins, z_num))
-niz_true_RP = np.zeros((zbins, z_num))
+niz_true_RP_arr = np.zeros((zbins, z_num))
 niz_shifted = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
-for zbin_idx in range(zbins):
+for zbin_idx in range(2):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
-    niz_true_RP[zbin_idx, :] = ray.get(niz_true_RP_ray.remote(z_grid, zbin_idx))
+    niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
     zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
     zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
-delta_z = zmean_tot - zmean_fid  # ! free to vary, zbins additional parameters
+delta_z = zmean_tot - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
 for zbin_idx in range(zbins):
     niz_shifted[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
 
 plt.figure()
-linestyles = ['-', '--', ':']
+lnstl = ['-', '--', ':']
 
 label_switch = 1  # this is to display the labels only for the first iteration
 for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
-    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=linestyles[0])
-    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=linestyles[1])
-    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx],
-             ls=linestyles[1])
-    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=linestyles[2])
-    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=linestyles[2])
+    # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
+             ls=lnstl[1])
+    # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 
 plt.legend()
+
 
 # nicer legend
 # dummy_lines = []
 # linestyle_labels = ['fiducial', 'shifted/true', 'zmean']
-# for i in range(len(linestyles)):
-#     dummy_lines.append(plt.plot([], [], c_case="black", ls=linestyles[i])[0])
+# for i in range(len(lnstl)):
+#     dummy_lines.append(plt.plot([], [], c_case="black", ls=lnstl[i])[0])
 #
 # linestyles_legend = plt.legend(dummy_lines, linestyle_labels)
 # plt.gca().add_artist(linestyles_legend)
 
+ray.shutdown()
+
 print(f'******* done in {(time.perf_counter() - start):.2f} s *******')
 
-assert 1 > 2
+"""assert 1 > 2
 
 z_p = 0.2
 pph_pert_list = [pph_pert(z_p, z) for z in z_grid]
@@ -418,3 +404,4 @@ plt.plot(z_grid, pph_pert_nosum_list, label='pph_pert_nosum_list')
 plt.legend()
 
 print('done')
+"""
