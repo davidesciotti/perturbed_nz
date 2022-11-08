@@ -86,7 +86,8 @@ z_minus_pert = rng.uniform(-0.15, 0.15, N_pert)
 z_plus_pert = rng.uniform(-0.15, 0.15, N_pert)
 omega_fid = rng.uniform(0.69, 0.99)  # ! should this be called omega_fid_pert?
 c_pert = np.ones(N_pert)
-nu_out = np.ones(N_pert)  # weights for Eq. (7)
+nu_out = 1.  # weights for Eq. (7)
+nu_in = 1.
 
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
@@ -146,22 +147,33 @@ def base_gaussian(z_p, z, nu_case, c_case, z_case, sigma_case):
 
 
 @njit
+def pph_in(z_p, z):
+    return (1 - omega_out) * base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
+
+
+@njit
+def pph_out(z_p, z):
+    return omega_out * base_gaussian(z_p, z, nu_out, c_out, z_out, sigma_out)
+
+
+@njit
 def pph_fid(z_p, z):
-    """nu_case is just a weight for the sum of gaussians, in this case it's just
-     (1 - omega_out) * pph_in + omega_out * pph_out"""
-    result = (1 - omega_out) * base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in) + \
-             omega_out * base_gaussian(z_p, z, nu_case=1, c_case=c_out, z_case=z_out, sigma_case=sigma_out)
-    return result
+    return pph_in(z_p, z) + pph_out(z_p, z)
 
 
-@njit
+# @njit
 def pph_pert(z_p, z):
-    result = base_gaussian(z_p, z, nu_pert, c_pert, z_pert, sigma_pert)
-    return np.sum(result)
+
+    tosum = np.zeros((N_pert, z_p.shape[0]))
+    for pert_term_idx in range(N_pert):
+        tosum[pert_term_idx, :] = base_gaussian(z_p, z, nu_pert[pert_term_idx], c_pert[pert_term_idx],
+                                                z_pert[pert_term_idx], sigma_pert[pert_term_idx])
+    return np.sum(tosum, axis=0)
 
 
-@njit
-def pph_true(z_p, z, omega_fid=omega_fid):
+# @njit
+def pph_true(z_p, z):
+    print(z_p)
     return omega_fid * pph_fid(z_p, z) + (1 - omega_fid) * pph_pert(z_p, z)
 
 
@@ -176,15 +188,15 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
         return (z_in - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in + z_case[zbin_idx])
 
     else:
+        assert np.allclose(sigma_in, sigma_case, atol=0,
+                           rtol=1e-5) is False, 'sigma_in must not be equal to sigma_<case>'
+
         z_minus_case = z_minus_case_func(sigma_in, z_in, sigma_case, z_case)
         z_plus_case = z_plus_case_func(sigma_in, z_in, sigma_case, z_case)
-
-        assert np.allclose(sigma_in, sigma_case, atol=0, rtol=1e-4) is False, 'sigma_in must not be equal to sigma_case'
+        print('z_minus_case', z_minus_case)
 
         result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
                  ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
-        if np.abs(result) > 5:
-            print('inside P:', result, zbin_idx, sigma_case[zbin_idx], sigma_in)
         return result
 
 
@@ -207,7 +219,7 @@ def P_pert(z_p, z, zbin_idx):
 
 ##################################################### R functions ######################################################
 # @njit
-def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
+def R_old(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
     result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(-0.5 * P_shortened / (sigma_in * (1 + z)) ** 2)
 
@@ -218,16 +230,21 @@ def R(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
         return result
 
 
+def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
+    return base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx]) / \
+           base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
+
+
 # @njit
 def R_pert(z_p, z, zbin_idx):
     assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
-    return np.sum(R(z_p, z, zbin_idx, nu_pert, z_pert, sigma_pert, z_in, sigma_in))
+    return np.sum(R(z_p, z, zbin_idx, nu_pert, c_pert, z_pert, sigma_pert))
 
 
 # @njit
 def R_out(z_p, z, zbin_idx):
     # sigma_out and z_out are scalars, I vectorize them to make the function work with the P function
-    return R(z_p, z, zbin_idx, nu_out, z_out * np.ones(N_pert), sigma_out * np.ones(N_pert), z_in, sigma_in)
+    return R(z_p, z, zbin_idx, nu_out, c_out, z_out * np.ones(N_pert), sigma_out * np.ones(N_pert))
 
 
 # intantiate a grid for simpson integration which passes through all the bin edges (which are the integration limits!)
@@ -273,8 +290,10 @@ def niz_normalization(zbin_idx, niz_unnormalized_func, pph):
 
 
 def niz_normalized(z, zbin_idx, pph):
-    """this is a wrapper function which normalizes the result. The if-else is needed not to compute the normalization
-    for each z, but only once for each zbin_idx"""
+    """this is a wrapper function which normalizes the result.
+    The if-else is needed not to compute the normalization for each z, but only once for each zbin_idx
+    Note that the niz_unnormalized function is not vectorized in z (its 1st argument)
+    """
 
     if type(z) == float or type(z) == int:
         return niz_unnormalized(z, zbin_idx, pph) / niz_normalization(zbin_idx, niz_unnormalized, pph)
@@ -349,10 +368,10 @@ zmean_tot = np.zeros(zbins)
 
 # ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these paramters.
 
-for zbin_idx in range(2):
+for zbin_idx in range(zbins):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
-    niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
+    # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
     zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
     zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
@@ -363,16 +382,16 @@ for zbin_idx in range(zbins):
 lnstl = ['-', '--', ':']
 label_switch = 1  # this is to display the labels only for the first iteration
 plt.figure()
-for zbin_idx in range(2):
+for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
-    # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
-    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls='-')
-    plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
-             ls='--')
+    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    # plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
+    #          ls='--')
     # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
-    # plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
-    # plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 
 plt.legend()
 
@@ -384,6 +403,7 @@ plt.legend()
 #
 # linestyles_legend = plt.legend(dummy_lines, linestyle_labels)
 # plt.gca().add_artist(linestyles_legend)
+
 
 ray.shutdown()
 
