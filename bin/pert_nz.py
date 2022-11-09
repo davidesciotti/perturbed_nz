@@ -161,16 +161,21 @@ def pph_fid(z_p, z):
     return pph_in(z_p, z) + pph_out(z_p, z)
 
 
-@njit
+# @njit
 def pph_pert(z_p, z):
     """this function is vectorized in z_p, not in the _pert input arrays"""
     tosum = np.array([base_gaussian(z_p, z, nu_pert[i], c_pert[i], z_pert[i], sigma_pert[i]) for i in range(N_pert)])
     return np.sum(tosum, axis=0)
 
 
-@njit
+# @njit
 def pph_true(z_p, z):
     return omega_fid * pph_fid(z_p, z) + (1 - omega_fid) * pph_pert(z_p, z)
+
+
+# not yet used!
+pph_true_ray = ray.remote(pph_true)
+pph_pert_ray = ray.remote(pph_pert)
 
 
 ##################################################### P functions ######################################################
