@@ -18,12 +18,12 @@ from scipy.special import erf
 project_path = Path.cwd().parent
 
 sys.path.append(str(project_path))
-sys.path.append(str(project_path.parent / 'common_data/common_config'))
 
 # project modules
 # import proj_lib.cosmo_lib as csmlb
 # import config.config as cfg
 # general configuration modules
+sys.path.append(str(project_path.parent / 'common_data/common_config'))
 import ISTF_fid_params as ISTF
 import mpl_cfg as mpl_cfg
 
@@ -48,7 +48,7 @@ Ob0 = ISTF.primary['Om_b0']
 
 gamma = ISTF.extensions['gamma']
 
-z_edges = ISTF.photoz_bins['zbin_edges']
+z_edges = ISTF.photoz_bins['all_zbin_edges']
 z_minus = z_edges[:-1]
 z_plus = z_edges[1:]
 z_m = ISTF.photoz_bins['z_median']
@@ -232,6 +232,8 @@ def R_old(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
 
 
 def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
+    print(z_p, z, zbin_idx, 'osad', nu_in, c_in, z_in, sigma_in, base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in))
+    print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
     return base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx]) / \
            base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
 
@@ -245,7 +247,7 @@ def R_pert(z_p, z, zbin_idx):
 # @njit
 def R_out(z_p, z, zbin_idx):
     # sigma_out and z_out are scalars, I vectorize them to make the function work with the P function
-    return R(z_p, z, zbin_idx, nu_out, c_out, z_out * np.ones(N_pert), sigma_out * np.ones(N_pert))
+    return R(z_p, z, zbin_idx, nu_out * np.ones(N_pert), c_out* np.ones(N_pert), z_out * np.ones(N_pert), sigma_out * np.ones(N_pert))
 
 
 # intantiate a grid for simpson integration which passes through all the bin edges (which are the integration limits!)
@@ -372,7 +374,7 @@ zmean_tot = np.zeros(zbins)
 for zbin_idx in range(zbins):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
-    # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
+    niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
     zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
     zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
