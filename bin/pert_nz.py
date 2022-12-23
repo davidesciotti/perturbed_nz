@@ -401,6 +401,10 @@ def niz_true_RP(z, zbin_idx):
 # ray versions of the above functions
 niz_true_RP_ray = ray.remote(niz_true_RP)
 niz_normalized_ray = ray.remote(niz_normalized)
+niz_unnormalized_simps_ray = ray.remote(niz_unnormalized_simps)
+niz_unnormalized_quadvec_ray = ray.remote(niz_unnormalized_quadvec)
+niz_unnormalized_quad_ray = ray.remote(niz_unnormalized_quad)
+niz_unnormalized_analytical_ray = ray.remote(niz_unnormalized_analytical)
 
 ########################################################################################################################
 
@@ -420,17 +424,18 @@ zmean_tot = np.zeros(zbins)
 
 # ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these parameters.
 
-
-# " test various niz functions
-
-niz_unnorm_simps_arr = np.array([niz_unnormalized_simps(z_arr, zbin_idx, pph_fid) for zbin_idx in range(zbins)])
-niz_unnorm_quadvec_arr = np.array([[niz_unnormalized_quadvec(z, zbin_idx, pph_fid)
+start = time.time()
+niz_unnorm_simps_arr = np.array([ray.get(niz_unnormalized_simps_ray.remote(z_arr, zbin_idx, pph_fid))
+                                 for zbin_idx in range(zbins)])
+niz_unnorm_quadvec_arr = np.array([[ray.get(niz_unnormalized_quadvec_ray.remote(z, zbin_idx, pph_fid))
                                     for z in z_arr]
                                    for zbin_idx in range(zbins)])
-niz_unnorm_quad_arr = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid)
+niz_unnorm_quad_arr = np.array([[ray.get(niz_unnormalized_quad_ray.remote(z, zbin_idx, pph_fid))
                                  for z in z_arr]
                                 for zbin_idx in range(zbins)])
-niz_unnorm_analytical_arr = np.array([niz_unnormalized_analytical(z_arr, zbin_idx) for zbin_idx in range(zbins)])
+niz_unnorm_analytical_arr = np.array([ray.get(niz_unnormalized_analytical_ray.remote(z_arr, zbin_idx))
+                                      for zbin_idx in range(zbins)])
+print(f'ray.get took {time.time() - start} seconds')
 
 # now normalize the arrays
 niz_norm_simps_arr = normalize_niz_simps(niz_unnorm_simps_arr, z_arr)
@@ -450,13 +455,6 @@ ax.set_ylabel('n_i(z)')
 ax.legend()
 plt.show()
 
-np.save('/Users/davide/Desktop/test_niz/niz_norm_simps_arr.npy', niz_norm_simps_arr)
-np.save('/Users/davide/Desktop/test_niz/niz_norm_quadvec_arr.npy', niz_norm_quadvec_arr)
-np.save('/Users/davide/Desktop/test_niz/niz_norm_quad_arr.npy', niz_norm_quad_arr)
-np.save('/Users/davide/Desktop/test_niz/niz_norm_analytical_arr.npy', niz_norm_analytical_arr)
-
-pph_fid_arr = np.array([pph_fid(z_p, z=0.2) for z_p in z_arr])
-np.save('/Users/davide/Desktop/test_niz/pph_fid_arr.npy', pph_fid_arr)
 
 
 assert 1 > 2
