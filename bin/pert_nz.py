@@ -7,12 +7,9 @@ import ray
 import time
 import numpy as np
 import logging
-import quadpy
 from matplotlib import cm
-from mpire import WorkerPool
 from numba import njit
 from scipy.integrate import quad, quad_vec, simpson, dblquad, simps
-from scipy.interpolate import interp1d, interp2d
 from scipy.special import erf
 
 project_path = Path.cwd().parent
@@ -163,7 +160,7 @@ def pph_fid(z_p, z):
 
 # @njit
 def pph_pert(z_p, z):
-    """this function is vectorized in z_p, not in the _pert input arrays"""
+    """this function is vectorized in 'z_p', not in the '_pert' input arrays"""
     tosum = np.array([base_gaussian(z_p, z, nu_pert[i], c_pert[i], z_pert[i], sigma_pert[i]) for i in range(N_pert)])
     return np.sum(tosum, axis=0)
 
@@ -247,7 +244,8 @@ def R_pert(z_p, z, zbin_idx):
 # @njit
 def R_out(z_p, z, zbin_idx):
     # sigma_out and z_out are scalars, I vectorize them to make the function work with the P function
-    return R(z_p, z, zbin_idx, nu_out * np.ones(N_pert), c_out* np.ones(N_pert), z_out * np.ones(N_pert), sigma_out * np.ones(N_pert))
+    return R(z_p, z, zbin_idx, nu_out * np.ones(N_pert), c_out * np.ones(N_pert), z_out * np.ones(N_pert),
+             sigma_out * np.ones(N_pert))
 
 
 # intantiate a grid for simpson integration which passes through all the bin edges (which are the integration limits!)
@@ -349,6 +347,8 @@ def niz_true_RP(z, zbin_idx):
     return omega_fid * (1 - omega_out) * n(z) * quad_vec(integrand, z_min, z_max, args=(z, zbin_idx))[0]
 
 
+
+
 # ray versions of the above functions
 niz_true_RP_ray = ray.remote(niz_true_RP)
 niz_normalized_ray = ray.remote(niz_normalized)
@@ -374,7 +374,7 @@ zmean_tot = np.zeros(zbins)
 for zbin_idx in range(zbins):
     niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
     niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
-    niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
+    # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
     zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
     zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
@@ -392,7 +392,7 @@ for zbin_idx in range(zbins):
     plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     # plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
     #          ls='--')
-    # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
     plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 
