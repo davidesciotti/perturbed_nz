@@ -1,4 +1,5 @@
 import sys
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -232,7 +233,7 @@ def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
     print(z_p, z, zbin_idx, 'osad', nu_in, c_in, z_in, sigma_in, base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in))
     print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
     return base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx]) / \
-           base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
+        base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
 
 
 # @njit
@@ -249,87 +250,137 @@ def R_out(z_p, z, zbin_idx):
 
 
 # intantiate a grid for simpson integration which passes through all the bin edges (which are the integration limits!)
+# equal number of points per bin
 zp_points = 500
-zp_num_per_bin = int(zp_points / zbins)
-zp_grid = np.empty(0)
-zp_bin_grid = np.zeros((zbins, zp_num_per_bin))
+zp_points_per_bin = int(zp_points / zbins)
+zp_bin_grid = np.zeros((zbins, zp_points_per_bin))
 for i in range(zbins):
-    zp_bin_grid[i, :] = np.linspace(z_edges[i], z_edges[i + 1], zp_num_per_bin)
+    zp_bin_grid[i, :] = np.linspace(z_edges[i], z_edges[i + 1], zp_points_per_bin)
 
-# alternative way
-zp_bin_grid = np.linspace(z_edges[0], z_edges[-1], zp_points)
-zp_bin_grid = np.append(zp_bin_grid, z_edges)  # add bin edges
-zp_bin_grid = np.sort(zp_bin_grid)
-zp_bin_grid = np.unique(zp_bin_grid)  # remove duplicates (first and last edges were already included)
-zp_bin_grid = np.tile(zp_bin_grid, (zbins, 1))  # repeat the grid for each bin (in each row)
-for i in range(zbins):  # remove all the points below the bin edge
-    zp_bin_grid[i, :] = np.where(zp_bin_grid[i, :] > z_edges[i], zp_bin_grid[i, :], 0)
+# more pythonic way of instantiating the same grid
+# zp_bin_grid = np.linspace(z_min, z_max, zp_points)
+# zp_bin_grid = np.append(zp_bin_grid, z_edges)  # add bin edges
+# zp_bin_grid = np.sort(zp_bin_grid)
+# zp_bin_grid = np.unique(zp_bin_grid)  # remove duplicates (first and last edges were already included)
+# zp_bin_grid = np.tile(zp_bin_grid, (zbins, 1))  # repeat the grid for each bin (in each row)
+# for i in range(zbins):  # remove all the points below the bin edge
+#     zp_bin_grid[i, :] = np.where(zp_bin_grid[i, :] > z_edges[i], zp_bin_grid[i, :], 0)
+
+# alternative: equispaced grid with z_edges added (does *not* work well, needs a lot of samples!!)
+zp_grid = np.linspace(z_min, z_max, 4000)
+zp_grid = np.concatenate((z_edges, zp_grid))
+zp_grid = np.unique(zp_grid)
+zp_grid = np.sort(zp_grid)
+# indices of z_edges in zp_grid:
+z_edges_idxs = np.array([np.where(zp_grid == z_edges[i])[0][0] for i in range(z_edges.shape[0])])
 
 
-def niz_unnormalized_simps(z, zbin_idx, pph):
-    """numerator of Eq. (112) of ISTF, with simpson integration"""
+def niz_unnormalized_simps(z_arr, zbin_idx, pph):
+    """numerator of Eq. (112) of ISTF, with simpson integration
+    Not too fast (3.0980 s for 500 z_p points)"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    niz_unnorm_integrand = pph(zp_bin_grid[zbin_idx, :], z)
-    niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[zbin_idx, :])
-    niz_unnorm_integral *= n(z)
+    niz_unnorm_integrand = np.array([pph(zp_bin_grid[zbin_idx, :], z) for z in z_arr])
+    niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[zbin_idx, :], axis=1)
+    niz_unnorm_integral *= n(z_arr)
     return niz_unnorm_integral
 
 
-def niz_unnormalized(z, zbin_idx, pph):
+# def niz_unnormalized_simps(z, zbin_idx, pph):
+#     """numerator of Eq. (112) of ISTF, with simpson integration"""
+#     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+#     niz_unnorm_integrand = np.array([pph(z, zp_bin_grid[zbin_idx, :]) for z in z_arr])
+#     niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[zbin_idx, :], axis=1)
+#     niz_unnorm_integral *= n(z_arr)  # ! z_arr?
+#     return niz_unnorm_integral
+
+
+def niz_unnormalized_simps_fullgrid(z_arr, zbin_idx, pph):
+    """numerator of Eq. (112) of ISTF, with simpson integration and "global" grid"""
+    warnings.warn('this function does not work well, needs very high number of samples;'
+                  ' the zp_bin_grid sampling is better')
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    z_minus = z_edges_idxs[zbin_idx]
+    z_plus = z_edges_idxs[zbin_idx + 1]
+    niz_unnorm_integrand = np.array([pph(zp_grid[z_minus:z_plus], z) for z in z_arr])
+    niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_grid[z_minus:z_plus], axis=1)
+    return niz_unnorm_integral * n(z_arr)
+
+
+def quad_integrand(z_p, z, pph):
+    return n(z) * pph(z_p, z)
+
+
+def niz_unnormalized_quad(z, zbin_idx, pph):
+    """with quad - 0.620401143 s, faster than quadvec..."""
+    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
+    return quad(quad_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, pph))[0]
+
+
+def niz_unnormalized_quadvec(z, zbin_idx, pph):
     """
-    :param z: float, does not accept an array. Same as above, but with quad_vec
+    :param z: float, does not accept an array. Same as above, but with quad_vec.
+    ! the difference is that the integrand can be a vector-valued function (in this case in z_p),
+    so it's supposedly faster? -> no, it's slower - 5.5253 s
     """
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    niz_unnorm = quad_vec(pph, z_edges[zbin_idx], z_edges[zbin_idx + 1], args=z)[0]
-    niz_unnorm *= n(z)
+    niz_unnorm = quad_vec(quad_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, pph))[0]
     return niz_unnorm
 
 
-def niz_normalization(zbin_idx, niz_unnormalized_func, pph):
+def niz_unnormalized_analytical(z, zbin_idx):
+    """the one used by Stefano in the PyCCL notebook
+    by far the fastest, 0.009592 s"""
+    addendum_1 = erf((z - z_out - c_out * z_edges[zbin_idx]) / (sqrt2 * (1 + z) * sigma_out))
+    addendum_2 = erf((z - z_out - c_out * z_edges[zbin_idx + 1]) / (sqrt2 * (1 + z) * sigma_out))
+    addendum_3 = erf((z - z_in - c_in * z_edges[zbin_idx]) / (sqrt2 * (1 + z) * sigma_in))
+    addendum_4 = erf((z - z_in - c_in * z_edges[zbin_idx + 1]) / (sqrt2 * (1 + z) * sigma_in))
+
+    result = n(z) / (2 * c_out * c_in) * \
+             (c_in * omega_out * (addendum_1 - addendum_2) + c_out * (1 - omega_out) * (addendum_3 - addendum_4))
+    return result
+
+
+def niz_normalization_quad(niz_unnormalized_func, zbin_idx, pph):
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    return quad(niz_unnormalized_func, z_edges[0], z_edges[-1], args=(zbin_idx, pph))[0]
+    return quad(niz_unnormalized_func, z_min, z_max, args=(zbin_idx, pph))[0]
+
+
+def normalize_niz_simps(niz_unnorm_arr, z_arr):
+    """ much more convenient; uses simps, and accepts as input an array of shape (zbins, z_points)"""
+    norm_factor = simps(niz_unnorm_arr, z_arr)
+    niz_norm = (niz_unnorm_arr.T / norm_factor).T
+    return niz_norm
 
 
 def niz_normalized(z, zbin_idx, pph):
     """this is a wrapper function which normalizes the result.
     The if-else is needed not to compute the normalization for each z, but only once for each zbin_idx
-    Note that the niz_unnormalized function is not vectorized in z (its 1st argument)
+    Note that the niz_unnormalized_quadvec function is not vectorized in z (its 1st argument)
     """
-
+    warnings.warn("this function should be deprecated")
     if type(z) == float or type(z) == int:
-        return niz_unnormalized(z, zbin_idx, pph) / niz_normalization(zbin_idx, niz_unnormalized, pph)
+        return niz_unnormalized_quadvec(z, zbin_idx, pph) / niz_normalization_quad(niz_unnormalized_quadvec, zbin_idx,
+                                                                                   pph)
 
     elif type(z) == np.ndarray:
-        niz_unnormalized_arr = np.asarray([niz_unnormalized(z_value, zbin_idx, pph) for z_value in z])
-        return niz_unnormalized_arr / niz_normalization(zbin_idx, niz_unnormalized, pph)
+        niz_unnormalized_arr = np.asarray([niz_unnormalized_quadvec(z_value, zbin_idx, pph) for z_value in z])
+        return niz_unnormalized_arr / niz_normalization_quad(niz_unnormalized_quadvec, zbin_idx, pph)
 
     else:
         raise TypeError('z must be a float, an int or a numpy array')
 
 
-def niz_unnorm_stef(z, i):
-    """the one used by Stefano in the PyCCL notebook"""
-    addendum_1 = erf((z - z_out - c_out * z_edges[i]) / sqrt2 / (1 + z) / sigma_out)
-    addendum_2 = erf((z - z_out - c_out * z_edges[i + 1]) / sqrt2 / (1 + z) / sigma_out)
-    addendum_3 = erf((z - z_in - c_in * z_edges[i]) / sqrt2 / (1 + z) / sigma_in)
-    addendum_4 = erf((z - z_in - c_in * z_edges[i + 1]) / sqrt2 / (1 + z) / sigma_in)
-
-    result = n(z) * 1 / 2 / c_out / c_in * \
-             (c_in * omega_out * (addendum_1 - addendum_2) + c_out * (1 - omega_out) * (addendum_3 - addendum_4))
-    return result
-
-
 def mean_z(zbin_idx, pph):
     """mean redshift of the galaxies in the zbin_idx-th bin"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_edges[0], z_edges[-1])[0]
+    return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_min, z_max)[0]
 
 
 @ray.remote
 def mean_z_simps(zbin_idx, pph):
     """mean redshift of the galaxies in the zbin_idx-th bin; faster version with simpson integration"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    z_grid = np.linspace(z_edges[0], z_edges[-1], 500)
+    z_grid = np.linspace(z_min, z_max, 500)
     integrand = z_grid * niz_normalized(z_grid, zbin_idx, pph)
     return simps(y=integrand, x=z_grid)
 
@@ -347,16 +398,14 @@ def niz_true_RP(z, zbin_idx):
     return omega_fid * (1 - omega_out) * n(z) * quad_vec(integrand, z_min, z_max, args=(z, zbin_idx))[0]
 
 
-
-
 # ray versions of the above functions
 niz_true_RP_ray = ray.remote(niz_true_RP)
 niz_normalized_ray = ray.remote(niz_normalized)
 
 ########################################################################################################################
 
-z_num = 200
-z_grid = np.linspace(z_min, z_max, z_num)
+z_num = 500
+z_arr = np.linspace(0, 4, z_num)
 
 # linspace from rainbow colormap
 colors = np.linspace(0, 1, zbins)
@@ -369,18 +418,60 @@ niz_shifted = np.zeros((zbins, z_num))
 zmean_fid = np.zeros(zbins)
 zmean_tot = np.zeros(zbins)
 
-# ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these paramters.
+# ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these parameters.
+
+
+# " test various niz functions
+
+niz_unnorm_simps_arr = np.array([niz_unnormalized_simps(z_arr, zbin_idx, pph_fid) for zbin_idx in range(zbins)])
+niz_unnorm_quadvec_arr = np.array([[niz_unnormalized_quadvec(z, zbin_idx, pph_fid)
+                                    for z in z_arr]
+                                   for zbin_idx in range(zbins)])
+niz_unnorm_quad_arr = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid)
+                                 for z in z_arr]
+                                for zbin_idx in range(zbins)])
+niz_unnorm_analytical_arr = np.array([niz_unnormalized_analytical(z_arr, zbin_idx) for zbin_idx in range(zbins)])
+
+# now normalize the arrays
+niz_norm_simps_arr = normalize_niz_simps(niz_unnorm_simps_arr, z_arr)
+niz_norm_quadvec_arr = normalize_niz_simps(niz_unnorm_quadvec_arr, z_arr)
+niz_norm_quad_arr = normalize_niz_simps(niz_unnorm_quad_arr, z_arr)
+niz_norm_analytical_arr = normalize_niz_simps(niz_unnorm_analytical_arr, z_arr)
+
+# plot
+zbin_idx = 5
+fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+ax.plot(z_arr, niz_norm_simps_arr[zbin_idx], label='niz_simps', lw=1.5)
+ax.plot(z_arr, niz_norm_quadvec_arr[zbin_idx], label='niz_quadvec', lw=1.5)
+ax.plot(z_arr, niz_norm_quad_arr[zbin_idx], label='niz_quad', lw=1.5)
+ax.plot(z_arr, niz_norm_analytical_arr[zbin_idx], label='niz_analytical', lw=1.5)
+ax.set_xlabel('z')
+ax.set_ylabel('n_i(z)')
+ax.legend()
+plt.show()
+
+np.save('/Users/davide/Desktop/test_niz/niz_norm_simps_arr.npy', niz_norm_simps_arr)
+np.save('/Users/davide/Desktop/test_niz/niz_norm_quadvec_arr.npy', niz_norm_quadvec_arr)
+np.save('/Users/davide/Desktop/test_niz/niz_norm_quad_arr.npy', niz_norm_quad_arr)
+np.save('/Users/davide/Desktop/test_niz/niz_norm_analytical_arr.npy', niz_norm_analytical_arr)
+
+pph_fid_arr = np.array([pph_fid(z_p, z=0.2) for z_p in z_arr])
+np.save('/Users/davide/Desktop/test_niz/pph_fid_arr.npy', pph_fid_arr)
+
+
+assert 1 > 2
 
 for zbin_idx in range(zbins):
-    niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_fid))
-    niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_grid, zbin_idx, pph_true))
+    niz_fid[zbin_idx] = niz_unnormalized_simps(z_arr, zbin_idx, pph_fid)
+    niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_arr, zbin_idx, pph_fid))
+    niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_arr, zbin_idx, pph_true))
     # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
     zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
     zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
 
 delta_z = zmean_tot - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
 for zbin_idx in range(zbins):
-    niz_shifted[zbin_idx, :] = niz_normalized(z_grid - delta_z[zbin_idx], zbin_idx, pph_fid)
+    niz_shifted[zbin_idx, :] = niz_normalized(z_arr - delta_z[zbin_idx], zbin_idx, pph_fid)
 
 lnstl = ['-', '--', ':']
 label_switch = 1  # this is to display the labels only for the first iteration
@@ -388,11 +479,11 @@ plt.figure()
 for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
-    plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
-    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_arr, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
+    plt.plot(z_arr, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     # plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
     #          ls='--')
-    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_arr, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
     plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 
