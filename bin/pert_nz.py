@@ -1,5 +1,6 @@
 import sys
 import warnings
+from functools import partial
 from pathlib import Path
 
 import matplotlib
@@ -9,6 +10,7 @@ import time
 import numpy as np
 import logging
 from matplotlib import cm
+from mpire import WorkerPool
 from numba import njit
 from scipy.integrate import quad, quad_vec, simpson, dblquad, simps
 from scipy.special import erf
@@ -24,6 +26,9 @@ sys.path.append(str(project_path))
 sys.path.append(str(project_path.parent / 'common_data/common_config'))
 import ISTF_fid_params as ISTF
 import mpl_cfg as mpl_cfg
+
+sys.path.append(str(project_path.parent / 'common_data/common_lib'))
+import my_module as mm
 
 # update plot paramseters
 rcParams = mpl_cfg.mpl_rcParams_dict
@@ -376,11 +381,10 @@ def mean_z(zbin_idx, pph):
     return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_min, z_max)[0]
 
 
-@ray.remote
-def mean_z_simps(zbin_idx, pph):
+def mean_z_simps(zbin_idx, pph, zsteps=500):
     """mean redshift of the galaxies in the zbin_idx-th bin; faster version with simpson integration"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    z_grid = np.linspace(z_min, z_max, 500)
+    z_grid = np.linspace(z_min, z_max, zsteps)
     integrand = z_grid * niz_normalized(z_grid, zbin_idx, pph)
     return simps(y=integrand, x=z_grid)
 
@@ -398,14 +402,25 @@ def niz_true_RP(z, zbin_idx):
     return omega_fid * (1 - omega_out) * n(z) * quad_vec(integrand, z_min, z_max, args=(z, zbin_idx))[0]
 
 
-# ray versions of the above functions
-niz_true_RP_ray = ray.remote(niz_true_RP)
-niz_normalized_ray = ray.remote(niz_normalized)
-niz_unnormalized_simps_ray = ray.remote(niz_unnormalized_simps)
-niz_unnormalized_quadvec_ray = ray.remote(niz_unnormalized_quadvec)
+mean_z_simps_ray = ray.remote(mean_z_simps)
 niz_unnormalized_quad_ray = ray.remote(niz_unnormalized_quad)
-niz_unnormalized_analytical_ray = ray.remote(niz_unnormalized_analytical)
 
+
+def loop_zbin_idx_ray(function, **kwargs):
+    """
+    eg, shortens this line of code:
+    zmean_fid_2 = np.asarray(ray.get([mean_z_simps_ray.remote(zbin_idx, pph_fid) for zbin_idx in range(zbins)]))
+
+    :param function:
+    :param kwargs:
+    :return:
+    """
+    remote_function = ray.remote(function)
+    return np.asarray(ray.get([remote_function.remote(zbin_idx=zbin_idx, **kwargs) for zbin_idx in range(zbins)]))
+
+
+########################################################################################################################
+########################################################################################################################
 ########################################################################################################################
 
 z_num = 500
@@ -415,61 +430,31 @@ z_arr = np.linspace(0, 4, z_num)
 colors = np.linspace(0, 1, zbins)
 colors = cm.get_cmap('rainbow')(colors)
 
-niz_fid = np.zeros((zbins, z_num))
-niz_true = np.zeros((zbins, z_num))
 niz_true_RP_arr = np.zeros((zbins, z_num))
-niz_shifted = np.zeros((zbins, z_num))
-zmean_fid = np.zeros(zbins)
-zmean_tot = np.zeros(zbins)
 
 # ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these parameters.
 
-start = time.time()
-niz_unnorm_simps_arr = np.array([ray.get(niz_unnormalized_simps_ray.remote(z_arr, zbin_idx, pph_fid))
-                                 for zbin_idx in range(zbins)])
-niz_unnorm_quadvec_arr = np.array([[ray.get(niz_unnormalized_quadvec_ray.remote(z, zbin_idx, pph_fid))
-                                    for z in z_arr]
-                                   for zbin_idx in range(zbins)])
-niz_unnorm_quad_arr = np.array([[ray.get(niz_unnormalized_quad_ray.remote(z, zbin_idx, pph_fid))
-                                 for z in z_arr]
-                                for zbin_idx in range(zbins)])
-niz_unnorm_analytical_arr = np.array([ray.get(niz_unnormalized_analytical_ray.remote(z_arr, zbin_idx))
-                                      for zbin_idx in range(zbins)])
-print(f'ray.get took {time.time() - start} seconds')
+# compute n_i(z) for each zbin, for the various pph
+niz_fid = np.array(
+    [[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_arr] for zbin_idx in range(zbins)])
+niz_true = np.array(
+    [[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_arr] for zbin_idx in range(zbins)])
 
-# now normalize the arrays
-niz_norm_simps_arr = normalize_niz_simps(niz_unnorm_simps_arr, z_arr)
-niz_norm_quadvec_arr = normalize_niz_simps(niz_unnorm_quadvec_arr, z_arr)
-niz_norm_quad_arr = normalize_niz_simps(niz_unnorm_quad_arr, z_arr)
-niz_norm_analytical_arr = normalize_niz_simps(niz_unnorm_analytical_arr, z_arr)
+# normalize the arrays
+niz_fid = normalize_niz_simps(niz_fid, z_arr)
+niz_true = normalize_niz_simps(niz_true, z_arr)
 
-# plot
-zbin_idx = 5
-fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-ax.plot(z_arr, niz_norm_simps_arr[zbin_idx], label='niz_simps', lw=1.5)
-ax.plot(z_arr, niz_norm_quadvec_arr[zbin_idx], label='niz_quadvec', lw=1.5)
-ax.plot(z_arr, niz_norm_quad_arr[zbin_idx], label='niz_quad', lw=1.5)
-ax.plot(z_arr, niz_norm_analytical_arr[zbin_idx], label='niz_analytical', lw=1.5)
-ax.set_xlabel('z')
-ax.set_ylabel('n_i(z)')
-ax.legend()
-plt.show()
+# compute z shifts
+zmean_fid = loop_zbin_idx_ray(mean_z_simps, pph=pph_fid)
+zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
+delta_z = zmean_true - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
 
+zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
+niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx, pph_fid) for z in z_arr]
+                          for zbin_idx in range(zbins)])
 
+# niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
 
-assert 1 > 2
-
-for zbin_idx in range(zbins):
-    niz_fid[zbin_idx] = niz_unnormalized_simps(z_arr, zbin_idx, pph_fid)
-    niz_fid[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_arr, zbin_idx, pph_fid))
-    niz_true[zbin_idx, :] = ray.get(niz_normalized_ray.remote(z_arr, zbin_idx, pph_true))
-    # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
-    zmean_fid[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_fid))
-    zmean_tot[zbin_idx] = ray.get(mean_z_simps.remote(zbin_idx, pph_true))
-
-delta_z = zmean_tot - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
-for zbin_idx in range(zbins):
-    niz_shifted[zbin_idx, :] = niz_normalized(z_arr - delta_z[zbin_idx], zbin_idx, pph_fid)
 
 lnstl = ['-', '--', ':']
 label_switch = 1  # this is to display the labels only for the first iteration
@@ -483,7 +468,7 @@ for zbin_idx in range(zbins):
     #          ls='--')
     plt.plot(z_arr, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
-    plt.axvline(zmean_tot[zbin_idx], label='zmean_tot' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    plt.axvline(zmean_true[zbin_idx], label='zmean_true' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 
 plt.legend()
 
