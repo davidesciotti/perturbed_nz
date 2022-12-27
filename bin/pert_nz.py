@@ -92,6 +92,8 @@ c_pert = np.ones(N_pert)
 nu_out = 1.  # weights for Eq. (7)
 nu_in = 1.
 
+zero_cut = 1e-10
+
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
 # TODO do not redefine functions here! Take as many as you can from wf.py
@@ -146,6 +148,8 @@ def base_gaussian(z_p, z, nu_case, c_case, z_case, sigma_case):
     """
     result = (nu_case * c_case) / (sqrt2pi * sigma_case * (1 + z)) * np.exp(
         -0.5 * ((z - c_case * z_p - z_case) / (sigma_case * (1 + z))) ** 2)
+    if np.abs(result) < zero_cut:
+        return 0
     return result
 
 
@@ -240,12 +244,12 @@ def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
     print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
     numerator = base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx])
     denominator = base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
-    if np.allclose(numerator, 0, atol=0, rtol=rtol) and np.allclose(denominator, 0, atol=0, rtol=rtol):
+    if np.abs(numerator) < zero_cut and np.abs(denominator) < zero_cut:
         return 0
     try:
         return numerator / denominator
     except ZeroDivisionError:
-        print(numerator, denominator)
+        print('inside the try statement', numerator, denominator)
 
 
 def R_test(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
