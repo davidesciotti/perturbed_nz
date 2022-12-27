@@ -185,23 +185,24 @@ pph_pert_ray = ray.remote(pph_pert)
 
 # @njit
 def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
-    """ parameters named with ..._case shpuld be _out, _n or _eff"""
+    """
+    parameters named as "<name>_case" shpuld be "_out", "_n" or "_eff"
+    """
     assert type(zbin_idx) == int, "zbin_idx must be an integer"
 
     if np.allclose(sigma_case, sigma_in, atol=0, rtol=1e-5):
         return (z_in - z_case[zbin_idx]) * (2 * z_p - 2 * z + z_in + z_case[zbin_idx])
 
-    else:
-        assert np.allclose(sigma_in, sigma_case, atol=0,
-                           rtol=1e-5) is False, 'sigma_in must not be equal to sigma_<case>'
+    assert np.allclose(sigma_in, sigma_case, atol=0,
+                       rtol=1e-5) is False, 'sigma_in must not be equal to sigma_<case>'
 
-        z_minus_case = z_minus_case_func(sigma_in, z_in, sigma_case, z_case)
-        z_plus_case = z_plus_case_func(sigma_in, z_in, sigma_case, z_case)
-        print('z_minus_case', z_minus_case)
+    z_minus_case = z_minus_case_func(sigma_in, z_in, sigma_case, z_case)
+    z_plus_case = z_plus_case_func(sigma_in, z_in, sigma_case, z_case)
+    print('z_minus_case', z_minus_case)
 
-        result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
-                 ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
-        return result
+    result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
+             ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
+    return result
 
 
 # these are just convenience wrapper functions
@@ -234,11 +235,24 @@ def R_old(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
         return result
 
 
-def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
+def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
     print(z_p, z, zbin_idx, 'osad', nu_in, c_in, z_in, sigma_in, base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in))
     print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
-    return base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx]) / \
-        base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
+    numerator = base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx])
+    denominator = base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
+    if np.allclose(numerator, 0, atol=0, rtol=rtol) and np.allclose(denominator, 0, atol=0, rtol=rtol):
+        return 0
+    try:
+        return numerator / denominator
+    except ZeroDivisionError:
+        print(numerator, denominator)
+
+
+def R_test(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
+    print(z_p, z, zbin_idx, 'osad', nu_in, c_in, z_in, sigma_in, base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in))
+    print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
+    return base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx],
+                         sigma_case[zbin_idx]), base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
 
 
 # @njit
@@ -391,7 +405,7 @@ def mean_z_simps(zbin_idx, pph, zsteps=500):
 
 # check: construct niz_true using R and P, that is, implement Eq. (5)
 # TODO make this function more generic and/or use simps?
-def integrand(z_p, z, zbin_idx):
+def niz_true_RP_integrand(z_p, z, zbin_idx):
     integrand = 1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) + (1 - omega_fid) / \
                 ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx) * \
                 base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
@@ -399,14 +413,10 @@ def integrand(z_p, z, zbin_idx):
 
 
 def niz_true_RP(z, zbin_idx):
-    return omega_fid * (1 - omega_out) * n(z) * quad_vec(integrand, z_min, z_max, args=(z, zbin_idx))[0]
+    return omega_fid * (1 - omega_out) * n(z) * quad_vec(niz_true_RP_integrand, z_min, z_max, args=(z, zbin_idx))[0]
 
 
-mean_z_simps_ray = ray.remote(mean_z_simps)
-niz_unnormalized_quad_ray = ray.remote(niz_unnormalized_quad)
-
-
-def loop_zbin_idx_ray(function, **kwargs):
+def loop_zbin_idx_ray(function, zbins=zbins, **kwargs):
     """
     eg, shortens this line of code:
     zmean_fid_2 = np.asarray(ray.get([mean_z_simps_ray.remote(zbin_idx, pph_fid) for zbin_idx in range(zbins)]))
@@ -435,10 +445,9 @@ niz_true_RP_arr = np.zeros((zbins, z_num))
 # ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these parameters.
 
 # compute n_i(z) for each zbin, for the various pph
-niz_fid = np.array(
-    [[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_arr] for zbin_idx in range(zbins)])
-niz_true = np.array(
-    [[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_arr] for zbin_idx in range(zbins)])
+niz_fid = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_arr] for zbin_idx in range(zbins)])
+niz_true = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_arr] for zbin_idx in range(zbins)])
+niz_true_RP_arr = np.array([[niz_true_RP(z, zbin_idx) for z in z_arr] for zbin_idx in range(zbins)])
 
 # normalize the arrays
 niz_fid = normalize_niz_simps(niz_fid, z_arr)
@@ -454,7 +463,9 @@ niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx
                           for zbin_idx in range(zbins)])
 
 # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
-
+R_test_arr = np.asarray([R_test(z_p, .3, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_arr])
+plt.plot(z_arr, R_test_arr[:, 0])
+plt.plot(z_arr, R_test_arr[:, 1])
 
 lnstl = ['-', '--', ':']
 label_switch = 1  # this is to display the labels only for the first iteration
