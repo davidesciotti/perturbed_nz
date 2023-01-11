@@ -10,13 +10,11 @@ import time
 import numpy as np
 import logging
 from matplotlib import cm
-from mpire import WorkerPool
 from numba import njit
 from scipy.integrate import quad, quad_vec, simpson, dblquad, simps
 from scipy.special import erf
 
 project_path = Path.cwd().parent
-
 sys.path.append(str(project_path))
 
 # project modules
@@ -36,7 +34,6 @@ plt.rcParams.update(rcParams)
 matplotlib.use('Qt5Agg')
 
 ray.init(ignore_reinit_error=True, logging_level=logging.ERROR, dashboard_host='0.0.0.0')
-start = time.perf_counter()
 
 ###############################################################################
 ###############################################################################
@@ -92,12 +89,15 @@ c_pert = np.ones(N_pert)
 nu_out = 1.  # weights for Eq. (7)
 nu_in = 1.
 
-zero_cut = 1e-4  # ! dangerous?
+gaussian_zero_cut = 1e-26  # ! dangerous?
 manual_zmax = 4.
+
+assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
 
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
 # TODO do not redefine functions here! Take as many as you can from wf.py
+# TODO check different values of gaussian_zero_cut
 
 # a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
 # _case should be _out, _n or _eff. These have been obtained by solving the system of equations in the paper (Eq. 9)
@@ -149,11 +149,6 @@ def base_gaussian(z_p, z, nu_case, c_case, z_case, sigma_case):
     """
     result = (nu_case * c_case) / (sqrt2pi * sigma_case * (1 + z)) * np.exp(
         -0.5 * ((z - c_case * z_p - z_case) / (sigma_case * (1 + z))) ** 2)
-
-    # if np.abs(result) < zero_cut:
-    #     return 0.
-
-    # ! XXX I'm here, trying to understand how to implement the cut in an efficient way
 
     return result
 
@@ -234,14 +229,15 @@ def P_pert(z_p, z, zbin_idx):
 ##################################################### R functions ######################################################
 # @njit
 def R_old(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
+    """ In this case, I implement the factorization by Vincenzo, with the P convenience function.
+    This does not work yet."""
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
     result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(-0.5 * P_shortened / (sigma_in * (1 + z)) ** 2)
     return result
 
 
-def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
-    print(z_p, z, zbin_idx, 'osad', nu_in, c_in, z_in, sigma_in, base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in))
-    print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
+def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, gaussian_zero_cut=gaussian_zero_cut):
+    """ In this case, I simply take the ratio of Gaussians"""
     numerator = base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx])
     denominator = base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
 
@@ -257,17 +253,14 @@ def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
     #     return 0
     # return np.exp(log_ratio)
 
-    # TODO these are probably too slow
-    # either
-    if np.abs(numerator) < zero_cut and np.abs(denominator) < zero_cut:
+    # ! XXX this is quite delicate, check it a bit more
+    if (np.abs(numerator) < gaussian_zero_cut and np.abs(denominator) < gaussian_zero_cut) or denominator == 0:
         return 0
-
     return numerator / denominator
 
 
 # @njit
 def R_pert(z_p, z, zbin_idx):
-    assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
     return np.sum(R(z_p, z, zbin_idx, nu_pert, c_pert, z_pert, sigma_pert))
 
 
@@ -416,20 +409,30 @@ def mean_z_simps(zbin_idx, pph, zsteps=500):
 # check: construct niz_true using R and P, that is, implement Eq. (5)
 # TODO make this function more generic and/or use simps?
 def niz_true_RP_integrand(z_p, z, zbin_idx):
-    integrand = 1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) + (1 - omega_fid) / \
-                ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx) * \
+    integrand = (1 +
+                 omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) +
+                 (1 - omega_fid) / ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx)) * \
                 base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
     return integrand
 
 
 def niz_true_RP(z, zbin_idx):
-    return omega_fid * (1 - omega_out) * n(z) * quad_vec(niz_true_RP_integrand, z_min, z_max, args=(z, zbin_idx))[0]
+    return omega_fid * (1 - omega_out) * n(z) * quad_vec(niz_true_RP_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, zbin_idx))[0]
 
 
 def loop_zbin_idx_ray(function, zbins=zbins, **kwargs):
     """
     convenience function; eg, shortens this line of code:
     zmean_fid_2 = np.asarray(ray.get([mean_z_simps_ray.remote(zbin_idx, pph_fid) for zbin_idx in range(zbins)]))
+
+    I can use it also for a doulbe loop, e.g. these two are equivalent:
+
+    niz_fid = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_grid] for zbin_idx in range(zbins)])
+    niz_fid_ray = np.asarray([loop_zbin_idx_ray(niz_unnormalized_quad, z=z, pph=pph_fid) for z in z_grid]).T  # (you have to transpose!)
+
+    however, the second case is slower, probably because I'm calling ray.get len(z_grid) times.
+    It would probably be better to parallelize the z_grid loop...
+
     """
     remote_function = ray.remote(function)
     return np.asarray(ray.get([remote_function.remote(zbin_idx=zbin_idx, **kwargs) for zbin_idx in range(zbins)]))
@@ -448,43 +451,32 @@ colors = cm.get_cmap('rainbow')(colors)
 
 # ! problem: niz_true_RP(0.001, 1) is nan, for example. Let's try with these parameters.
 
-# compute n_i(z) for each zbin, for the various pph
-# niz_fid = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_grid] for zbin_idx in range(zbins)])
-# niz_true = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_grid] for zbin_idx in range(zbins)])
-# start = time.perf_counter()
-# niz_true_RP_arr = np.array([[niz_true_RP(z, zbin_idx) for z in z_grid] for zbin_idx in range(zbins)])
-# print('done!')
+# compute n_i(z) for each zbin, for the various pph. This is quite fast.
+niz_fid = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_grid] for zbin_idx in range(zbins)])
+niz_true = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_grid] for zbin_idx in range(zbins)])
+
+print('starting niz_true_RP_arr computation')
+niz_true_RP_ray = ray.remote(niz_true_RP)
+start_time = time.perf_counter()
+niz_true_RP_arr = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx) for z in z_grid])
+                            for zbin_idx in range(zbins)])
+print(f"niz_true_RP_arr with ray computed in {time.perf_counter() - start_time} seconds")
 
 # normalize the arrays
-# niz_fid = normalize_niz_simps(niz_fid, z_grid)
-# niz_true = normalize_niz_simps(niz_true, z_grid)
+niz_fid = normalize_niz_simps(niz_fid, z_grid)
+niz_true = normalize_niz_simps(niz_true, z_grid)
+niz_true_RP_arr = normalize_niz_simps(niz_true_RP_arr, z_grid)
 
 # compute z shifts
-zmean_fid = loop_zbin_idx_ray(mean_z_simps, pph=pph_fid)
-zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
-delta_z = zmean_true - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
+# zmean_fid = loop_zbin_idx_ray(mean_z_simps, pph=pph_fid)
+# zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
+# delta_z = zmean_true - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
+#
+# zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
+# niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx, pph_fid) for z in z_grid]
+#                           for zbin_idx in range(zbins)])
+#
 
-zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
-niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx, pph_fid) for z in z_grid]
-                          for zbin_idx in range(zbins)])
-
-# niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
-
-
-# XXX 10jan working here
-
-for z_test in (0.01, 0.1, 0.5, 1, 1.5, 2):
-    R_test_arr = np.asarray([R_test(z_p, z_test, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
-    R_arr = np.asarray([R(z_p, z_test, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
-
-    plt.figure()
-    plt.plot(z_grid, np.abs(R_test_arr[:, 0]), label='numerator')
-    plt.plot(z_grid, np.abs(R_test_arr[:, 1]), label='denominator')
-    plt.plot(z_grid, np.abs(R_arr), label='ratio')
-    plt.yscale('log')
-    plt.title('z_test = {}'.format(z_test))
-
-assert 1 > 2
 
 lnstl = ['-', '--', ':']
 label_switch = 1  # this is to display the labels only for the first iteration
@@ -493,14 +485,15 @@ for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
     # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
-    # plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
-             ls='--')
-    plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
-    plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
-    plt.axvline(zmean_true[zbin_idx], label='zmean_true' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
-
+             ls='-')
+    # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
+    # plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    # plt.axvline(zmean_true[zbin_idx], label='zmean_true' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
 plt.legend()
+
+assert 1 > 2
 
 # nicer legend
 # dummy_lines = []
@@ -512,9 +505,8 @@ plt.legend()
 # plt.gca().add_artist(linestyles_legend)
 
 
+print(f'******* done in {(time.perf_counter() - script_start):.2f} s *******')
 ray.shutdown()
-
-print(f'******* done in {(time.perf_counter() - start):.2f} s *******')
 
 """assert 1 > 2
 
