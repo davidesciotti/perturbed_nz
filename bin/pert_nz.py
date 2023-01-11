@@ -149,6 +149,12 @@ def base_gaussian(z_p, z, nu_case, c_case, z_case, sigma_case):
     """
     result = (nu_case * c_case) / (sqrt2pi * sigma_case * (1 + z)) * np.exp(
         -0.5 * ((z - c_case * z_p - z_case) / (sigma_case * (1 + z))) ** 2)
+
+    # if np.abs(result) < zero_cut:
+    #     return 0.
+
+    # ! XXX I'm here, trying to understand how to implement the cut in an efficient way
+
     return result
 
 
@@ -239,14 +245,33 @@ def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
     numerator = base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx])
     denominator = base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
 
+    # if both are very close to 0, return 0
+    # if np.allclose(numerator, 0, atol=0, rtol=rtol) and np.allclose(denominator, 0, atol=0, rtol=rtol):
+    #     return 0
+
+    # smarter alternatives
+    # if abs(x - mean2) > (3 * std2 + abs(mean1 - mean2)):
+    #     return 0
+    # else:
+    #     return ratio
+
+    # or
+    # log_ratio = np.log10(numerator) - np.log10((denominator))
+    # if log_ratio < np.log10(zero_cut):
+    #     return 0
+    # return np.exp(log_ratio)
+
     # TODO these are probably too slow
     # either
-    # if np.abs(numerator) < zero_cut and np.abs(denominator) < zero_cut:
-    #     return 0
+    if np.abs(numerator) < zero_cut and np.abs(denominator) < zero_cut:
+        return 0
+
+    # or
     # try:
     #     return numerator / denominator
     # except ZeroDivisionError:
     #     print('inside the try statement', numerator, denominator)
+    #     return np.nan  # should be 0
 
     # or
     # if denominator == 0:
@@ -466,18 +491,30 @@ zmean_fid = loop_zbin_idx_ray(mean_z_simps, pph=pph_fid)
 zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
 delta_z = zmean_true - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
 
-print('alive')
 zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
 niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx, pph_fid) for z in z_grid]
                           for zbin_idx in range(zbins)])
 
 # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
-print('alive 2')
-R_test_arr = np.asarray([R_test(z_p, 0.3, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
-plt.plot(z_grid, R_test_arr[:, 0])
-plt.plot(z_grid, R_test_arr[:, 1])
+
+
+
 
 # XXX 10jan working here
+
+for z_test in (0.01, 0.1, 0.5, 1, 1.5,  2):
+    R_test_arr = np.asarray([R_test(z_p, z_test, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
+    R_arr = np.asarray([R(z_p, z_test, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
+
+    plt.figure()
+    plt.plot(z_grid, np.abs(R_test_arr[:, 0]), label='numerator')
+    plt.plot(z_grid, np.abs(R_test_arr[:, 1]), label='denominator')
+    plt.plot(z_grid, np.abs(R_arr), label='ratio')
+    plt.yscale('log')
+    plt.title('z_test = {}'.format(z_test))
+
+
+
 
 
 assert 1 > 2
