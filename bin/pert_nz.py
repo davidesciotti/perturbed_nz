@@ -245,10 +245,6 @@ def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
     numerator = base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx], sigma_case[zbin_idx])
     denominator = base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
 
-    # if both are very close to 0, return 0
-    # if np.allclose(numerator, 0, atol=0, rtol=rtol) and np.allclose(denominator, 0, atol=0, rtol=rtol):
-    #     return 0
-
     # smarter alternatives
     # if abs(x - mean2) > (3 * std2 + abs(mean1 - mean2)):
     #     return 0
@@ -266,30 +262,7 @@ def R(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case, rtol=1e-6):
     if np.abs(numerator) < zero_cut and np.abs(denominator) < zero_cut:
         return 0
 
-    # or
-    # try:
-    #     return numerator / denominator
-    # except ZeroDivisionError:
-    #     print('inside the try statement', numerator, denominator)
-    #     return np.nan  # should be 0
-
-    # or
-    # if denominator == 0:
-    #     return 0
-
     return numerator / denominator
-
-
-
-
-def R_test(z_p, z, zbin_idx, nu_case, c_case, z_case, sigma_case):
-    """just to see what happens to the components of the ratio, i.e. where it explodes"""
-    print(z_p, z, zbin_idx, 'osad', nu_in, c_in, z_in, sigma_in, base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in))
-    print('the problem is that base_gaussian for z very far from z_p gives 0, at least I think')
-    numerator = base_gaussian(z_p, z, nu_case[zbin_idx], c_case[zbin_idx], z_case[zbin_idx],
-                              sigma_case[zbin_idx])
-    denominator = base_gaussian(z_p, z, nu_in, c_in, z_in, sigma_in)
-    return numerator, denominator
 
 
 # @njit
@@ -498,11 +471,9 @@ niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx
 # niz_true_RP_arr[zbin_idx, :] = [ray.get(niz_true_RP_ray.remote(z, zbin_idx)) for z in z_grid]
 
 
-
-
 # XXX 10jan working here
 
-for z_test in (0.01, 0.1, 0.5, 1, 1.5,  2):
+for z_test in (0.01, 0.1, 0.5, 1, 1.5, 2):
     R_test_arr = np.asarray([R_test(z_p, z_test, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
     R_arr = np.asarray([R(z_p, z_test, 0, nu_pert, c_pert, z_pert, sigma_pert) for z_p in z_grid])
 
@@ -512,10 +483,6 @@ for z_test in (0.01, 0.1, 0.5, 1, 1.5,  2):
     plt.plot(z_grid, np.abs(R_arr), label='ratio')
     plt.yscale('log')
     plt.title('z_test = {}'.format(z_test))
-
-
-
-
 
 assert 1 > 2
 
