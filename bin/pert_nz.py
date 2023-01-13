@@ -28,6 +28,9 @@ import mpl_cfg as mpl_cfg
 sys.path.append(str(project_path.parent / 'common_data/common_lib'))
 import my_module as mm
 
+sys.path.append(f'{project_path.parent}/cl_v2/bin')
+import wf_lib
+
 # update plot paramseters
 rcParams = mpl_cfg.mpl_rcParams_dict
 plt.rcParams.update(rcParams)
@@ -126,7 +129,6 @@ def z_plus_case_func(sigma_in, z_in, sigma_case, z_case):
 z_pert = z_case_func(z_minus_pert, z_plus_pert, z_in)
 sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, z_in, sigma_in)
 
-
 # and maybe
 # z_eff = z_case(z_minus_eff, z_plus_eff)
 # sigma_eff = sigma_case(z_minus_eff, z_plus_eff, sigma_in)
@@ -135,10 +137,7 @@ sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, z_in, sigma_in)
 ####################################### function definition
 
 
-@njit
-def n(z):
-    result = (z / z_0) ** 2 * np.exp(-(z / z_0) ** 1.5)
-    return result
+n = wf_lib.n  # n(z)
 
 
 @njit
@@ -296,15 +295,17 @@ zp_grid = np.sort(zp_grid)
 # indices of z_edges in zp_grid:
 z_edges_idxs = np.array([np.where(zp_grid == z_edges[i])[0][0] for i in range(z_edges.shape[0])])
 
+niz_unnormalized_simps = wf_lib.niz_unnormalized_simps
 
-def niz_unnormalized_simps(z_grid, zbin_idx, pph):
-    """numerator of Eq. (112) of ISTF, with simpson integration
-    Not too fast (3.0980 s for 500 z_p points)"""
-    assert type(zbin_idx) == int, 'zbin_idx must be an integer'  # TODO check if these slow down the code using scalene
-    niz_unnorm_integrand = np.array([pph(zp_bin_grid[zbin_idx, :], z) for z in z_grid])
-    niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[zbin_idx, :], axis=1)
-    niz_unnorm_integral *= n(z_grid)
-    return niz_unnorm_integral
+
+# def niz_unnormalized_simps(z_grid, zbin_idx, pph):
+#     """numerator of Eq. (112) of ISTF, with simpson integration
+#     Not too fast (3.0980 s for 500 z_p points)"""
+#     assert type(zbin_idx) == int, 'zbin_idx must be an integer'  # TODO check if these slow down the code using scalene
+#     niz_unnorm_integrand = np.array([pph(zp_bin_grid[zbin_idx, :], z) for z in z_grid])
+#     niz_unnorm_integral = simps(y=niz_unnorm_integrand, x=zp_bin_grid[zbin_idx, :], axis=1)
+#     niz_unnorm_integral *= n(z_grid)
+#     return niz_unnorm_integral
 
 
 # def niz_unnormalized_simps(z, zbin_idx, pph):
@@ -348,30 +349,9 @@ def niz_unnormalized_quadvec(z, zbin_idx, pph):
     niz_unnorm = quad_vec(quad_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, pph))[0]
     return niz_unnorm
 
-
-def niz_unnormalized_analytical(z, zbin_idx):
-    """the one used by Stefano in the PyCCL notebook
-    by far the fastest, 0.009592 s"""
-    addendum_1 = erf((z - z_out - c_out * z_edges[zbin_idx]) / (sqrt2 * (1 + z) * sigma_out))
-    addendum_2 = erf((z - z_out - c_out * z_edges[zbin_idx + 1]) / (sqrt2 * (1 + z) * sigma_out))
-    addendum_3 = erf((z - z_in - c_in * z_edges[zbin_idx]) / (sqrt2 * (1 + z) * sigma_in))
-    addendum_4 = erf((z - z_in - c_in * z_edges[zbin_idx + 1]) / (sqrt2 * (1 + z) * sigma_in))
-
-    result = n(z) / (2 * c_out * c_in) * \
-             (c_in * omega_out * (addendum_1 - addendum_2) + c_out * (1 - omega_out) * (addendum_3 - addendum_4))
-    return result
-
-
-def niz_normalization_quad(niz_unnormalized_func, zbin_idx, pph):
-    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    return quad(niz_unnormalized_func, z_min, z_max, args=(zbin_idx, pph))[0]
-
-
-def normalize_niz_simps(niz_unnorm_arr, z_grid):
-    """ much more convenient; uses simps, and accepts as input an array of shape (zbins, z_points)"""
-    norm_factor = simps(niz_unnorm_arr, z_grid)
-    niz_norm = (niz_unnorm_arr.T / norm_factor).T
-    return niz_norm
+niz_unnormalized_analytical = wf_lib.niz_unnormalized_analytical
+niz_normalization_quad = wf_lib.niz_normalization_quad
+normalize_niz_simps = wf_lib.normalize_niz_simps
 
 
 def niz_normalized(z, zbin_idx, pph):
@@ -417,7 +397,8 @@ def niz_true_RP_integrand(z_p, z, zbin_idx):
 
 
 def niz_true_RP(z, zbin_idx):
-    return omega_fid * (1 - omega_out) * n(z) * quad_vec(niz_true_RP_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, zbin_idx))[0]
+    return omega_fid * (1 - omega_out) * n(z) * \
+        quad_vec(niz_true_RP_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, zbin_idx))[0]
 
 
 def loop_zbin_idx_ray(function, zbins=zbins, **kwargs):
