@@ -93,7 +93,9 @@ nu_out = 1.  # weights for Eq. (7)
 nu_in = 1.
 
 gaussian_zero_cut = 1e-26  # ! dangerous?
+# TODO remove this cut on P? better at a higher level (aka R_with_P function)?
 max_P_cut = 250  # ! dangerous?
+exponent_cut = 100  # ! dangerous?
 manual_zmax = 4.
 
 assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
@@ -206,8 +208,8 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
              ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
 
-    if result > max_P_cut:
-        result = max_P_cut
+    # if result > max_P_cut:
+    #     result = max_P_cut
     return result
 
 
@@ -230,13 +232,21 @@ def P_pert(z_p, z, zbin_idx):
 
 ##################################################### R_no_P functions ######################################################
 # @njit
-exp_list = []
+R_with_p_list = []
 def R_with_P(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     """ In this case, I implement the factorization by Vincenzo, with the P convenience function.
     This does not work yet."""
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
-    result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(-0.5 * P_shortened / (sigma_in * (1 + z)) ** 2)
-    exp_list.append(-0.5 * P_shortened / (sigma_in * (1 + z)) ** 2)
+    exponent = -0.5 * P_shortened / (sigma_in * (1 + z)) ** 2
+
+    exponent = np.sign(exponent) * np.minimum(np.abs(exponent), exponent_cut)
+
+    # if np.abs(exponent) > exponent_cut:
+    #     exponent = np.sign(exponent) * exponent_cut
+
+    result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(exponent)
+
+    R_with_p_list.append(result)
     return result
 
 
@@ -361,7 +371,9 @@ niz_true_RP_ray = ray.remote(niz_true_RP)
 ########################################################################################################################
 ########################################################################################################################
 
-z_num = 500
+warnings.warn("restore z_num = 500")
+z_num = 200
+# z_num = 500
 z_grid = np.linspace(0, manual_zmax, z_num)
 
 # * compute n_i(z) for each zbin, for the various pph. This is quite fast.
@@ -370,25 +382,19 @@ niz_true = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_gr
 niz_true_RP_arr = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx) for z in z_grid])
                             for zbin_idx in range(zbins)])
 # with ray
-niz_true_RP_arr_2 = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx,  R_func=R_with_P) for z in z_grid])
-                            for zbin_idx in range(zbins)])
+# niz_true_RP_arr_2 = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx, R_func=R_with_P) for z in z_grid])
+#                               for zbin_idx in range(zbins)])
 # without ray
+print('start')
 niz_true_RP_arr_2 = np.array([[niz_true_RP(z=z, zbin_idx=zbin_idx, R_func=R_with_P) for z in z_grid]
                               for zbin_idx in range(zbins)])
 
-# debug R_with_P:
-niz_true_RP_arr_3 = np.zeros(niz_true_RP_arr.shape)
-for zbin_idx in range(zbins):
-    for z_idx, z in enumerate(z_grid):
-        try:
-            niz_true_RP_arr_3[zbin_idx, z_idx] = niz_true_RP(z=z, zbin_idx=zbin_idx, R_func=R_with_P)
-        except:
-            print("z_idx = ", z_idx)
-            niz_true_RP_arr_3[zbin_idx, z_idx] = 2
+plt.figure()
+plt.plot(R_with_p_list, label='R_with_p_list')
+plt.show()
+plt.legend()
 
 plt.figure()
-plt.plot(exp_list)
-
 # * normalize the arrays
 niz_fid = normalize_niz_simps(niz_fid, z_grid)
 niz_true = normalize_niz_simps(niz_true, z_grid)
@@ -428,8 +434,6 @@ for zbin_idx in range(zbins):
     plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
              ls='-', alpha=0.6)
     plt.plot(z_grid, niz_true_RP_arr_2[zbin_idx, :], label='niz_true_RP_arr_2' * label_switch, color=colors[zbin_idx],
-             ls='--', alpha=0.6)
-    plt.plot(z_grid, niz_true_RP_arr_3[zbin_idx, :], label='niz_true_RP_arr_3' * label_switch, color=colors[zbin_idx],
              ls='--', alpha=0.6)
     # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
     # plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
