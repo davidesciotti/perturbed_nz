@@ -13,6 +13,7 @@ from matplotlib import cm
 from numba import njit
 from scipy.integrate import quad, quad_vec, simpson, dblquad, simps
 from scipy.special import erf
+import multiprocessing
 
 project_path = Path.cwd().parent
 sys.path.append(str(project_path))
@@ -82,7 +83,8 @@ sqrt2 = np.sqrt(2)
 sqrt2pi = np.sqrt(2 * np.pi)
 
 # various parameters for the perturbed photo-z PDF
-rng = np.random.default_rng(seed=42)
+# rng = np.random.default_rng(seed=42)
+rng = np.random.default_rng()
 nu_pert = rng.uniform(-1, 1, N_pert)
 nu_pert /= np.sum(nu_pert)  # normalize the weights to 1
 z_minus_pert = rng.uniform(-0.15, 0.15, N_pert)
@@ -95,7 +97,7 @@ nu_in = 1.
 gaussian_zero_cut = 1e-26  # ! dangerous?
 # TODO remove this cut on P? better at a higher level (aka R_with_P function)?
 max_P_cut = 250  # ! dangerous?
-exponent_cut = 100  # ! dangerous?
+exponent_cut = 50  # ! dangerous?
 manual_zmax = 4.
 
 assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
@@ -132,7 +134,7 @@ def z_plus_case_func(sigma_in, z_in, sigma_case, z_case):
 z_pert = z_case_func(z_minus_pert, z_plus_pert, z_in)
 sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, z_in, sigma_in)
 
-# this is wrong: z_eff and sigma_eff are considered independent, we don't use these 2 relations
+# this is wrong: z_eff and sigma_eff are considered independent, we don't use these 2 relations:
 # z_eff = z_case_func(z_minus_eff, z_plus_eff)
 # sigma_eff = sigma_case_func(z_minus_eff, z_plus_eff, sigma_in)
 
@@ -141,6 +143,9 @@ sigma_pert = sigma_case_func(z_minus_pert, z_plus_pert, z_in, sigma_in)
 
 
 n_of_z = wf_cl_lib.n_of_z  # n(z)
+
+
+# TODO the problem is z_out in R_with_P
 
 
 @njit
@@ -208,8 +213,6 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     result = (z_p - z - z_minus_case[zbin_idx]) * (z_p - z - z_plus_case[zbin_idx]) * \
              ((sigma_case[zbin_idx] / sigma_in) ** (-2) - 1)
 
-    # if result > max_P_cut:
-    #     result = max_P_cut
     return result
 
 
@@ -230,22 +233,25 @@ def P_pert(z_p, z, zbin_idx):
     return P(z_p, z, zbin_idx, z_pert, sigma_pert, z_in, sigma_in)
 
 
-##################################################### R_no_P functions ######################################################
-# @njit
+##################################################### R_no/with_P functions ######################################################
 R_with_p_list = []
+
+
+# @njit
 def R_with_P(z_p, z, zbin_idx, nu_case, z_case, sigma_case, z_in, sigma_in):
     """ In this case, I implement the factorization by Vincenzo, with the P convenience function.
     This does not work yet."""
+
     P_shortened = P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in)  # just to make the equation more readable
     exponent = -0.5 * P_shortened / (sigma_in * (1 + z)) ** 2
 
+    # cut the exponent to avoid numerical problems
     exponent = np.sign(exponent) * np.minimum(np.abs(exponent), exponent_cut)
 
     # if np.abs(exponent) > exponent_cut:
     #     exponent = np.sign(exponent) * exponent_cut
 
     result = nu_case * sigma_in / sigma_case[zbin_idx] * np.exp(exponent)
-
     R_with_p_list.append(result)
     return result
 
@@ -282,13 +288,14 @@ def R_pert(z_p, z, zbin_idx, R_func=R_no_P):
 
 
 # @njit
-def R_out(z_p, z, zbin_idx, R_func=R_no_P):
+def R_out(z_p, z, zbin_idx, R_func=R_no_P):  # is this supposed to have a sum?
     # sigma_out and z_out are scalars, I vectorize them to make the function work with the P function
     if R_func == R_no_P:
         return R_func(z_p, z, zbin_idx, nu_out * np.ones(N_pert), c_out * np.ones(N_pert), z_out * np.ones(N_pert),
                       sigma_out * np.ones(N_pert))
     elif R_func == R_with_P:
-        return R_func(z_p, z, zbin_idx, nu_out, z_out, sigma_out, z_in, sigma_in)
+        return R_func(z_p, z, zbin_idx, nu_out * np.ones(N_pert), z_out*np.ones(N_pert), sigma_out * np.ones(N_pert),
+                      z_in, sigma_in)[0] # this is not very nice, the function o   utputs an array with
 
 
 #################################################### niz functions #####################################################
@@ -321,7 +328,7 @@ def mean_z(zbin_idx, pph):
     """mean redshift of the galaxies in the zbin_idx-th bin"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
     warnings.warn("is it necessary to use niz_normalized?")
-    return quad_vec(lambda z: z * niz_normalized(z, zbin_idx, pph), z_min, z_max)[0]
+    return quad(lambda z: z * niz_normalized(z, zbin_idx, pph), z_min, z_max)[0]
 
 
 def mean_z_simps(zbin_idx, pph, zsteps=500):
@@ -335,17 +342,26 @@ def mean_z_simps(zbin_idx, pph, zsteps=500):
 
 # check: construct niz_true using R_no_P and P, that is, implement Eq. (5)
 # TODO make this function more generic and/or use simps?
+niz_true_RP_integrand_list = []
+
+
 def niz_true_RP_integrand(z_p, z, zbin_idx, R_func=R_no_P):
-    integrand = (1 +
-                 omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx) +
+    # try:
+    # is it R_out(z_p, z, zbin_idx)? that is, with R_func=R_no_P?
+    integrand = (1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx, R_func) +
                  (1 - omega_fid) / ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx, R_func)) * \
                 base_gaussian(z_p, z, nu_case=1, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
+    # except:
+    #     print(R_pert(z_p, z, zbin_idx, R_func))
+    #     print(R_func(z_p, z, zbin_idx, nu_pert, z_pert, sigma_pert, z_in, sigma_in))
+
+    # niz_true_RP_integrand_list.append(integrand)
     return integrand
 
 
 def niz_true_RP(z, zbin_idx, R_func=R_no_P):
     return omega_fid * (1 - omega_out) * n_of_z(z) * \
-        quad_vec(niz_true_RP_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, zbin_idx, R_func))[0]
+        quad(niz_true_RP_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, zbin_idx, R_func))[0]
 
 
 def loop_zbin_idx_ray(function, zbins=zbins, **kwargs):
@@ -371,37 +387,51 @@ niz_true_RP_ray = ray.remote(niz_true_RP)
 ########################################################################################################################
 ########################################################################################################################
 
-warnings.warn("restore z_num = 500")
-z_num = 200
-# z_num = 500
+# z_num = 200
+z_num = 500
+if z_num != 500:
+    warnings.warn("restore z_num = 500")
 z_grid = np.linspace(0, manual_zmax, z_num)
 
 # * compute n_i(z) for each zbin, for the various pph. This is quite fast.
 niz_fid = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_fid) for z in z_grid] for zbin_idx in range(zbins)])
+
+# three ways to compute niz_true: just plugging the true pph, using R = phi/out/phi/in, using Eq.(7) (i.e, with the P
+# convenience funcion). These 3 should match.
 niz_true = np.array([[niz_unnormalized_quad(z, zbin_idx, pph_true) for z in z_grid] for zbin_idx in range(zbins)])
-niz_true_RP_arr = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx) for z in z_grid])
-                            for zbin_idx in range(zbins)])
 # with ray
-# niz_true_RP_arr_2 = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx, R_func=R_with_P) for z in z_grid])
+# niz_true_RnoP_arr = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx) for z in z_grid])
 #                               for zbin_idx in range(zbins)])
 # without ray
-print('start')
-niz_true_RP_arr_2 = np.array([[niz_true_RP(z=z, zbin_idx=zbin_idx, R_func=R_with_P) for z in z_grid]
-                              for zbin_idx in range(zbins)])
+niz_true_RnoP_arr = np.array([[niz_true_RP(z=z, zbin_idx=zbin_idx) for z in z_grid] for zbin_idx in range(zbins)])
+# with ray
+# niz_true_RwithP_arr = np.array([ray.get([niz_true_RP_ray.remote(z=z, zbin_idx=zbin_idx, R_func=R_with_P) for z in z_grid])
+#                               for zbin_idx in range(zbins)])
+# without ray
+start_time = time.perf_counter()
+niz_true_RwithP_arr = np.array([[niz_true_RP(z=z, zbin_idx=zbin_idx, R_func=R_with_P) for z in z_grid]
+                                for zbin_idx in range(zbins)])
+print(f"niz_true_RwithP_arr took {time.perf_counter() - start_time} seconds")
+# with multiprocessing, just to check whether ray is the problem
+
+# niz_true_RwithP_arr = np.zeros(niz_true_RnoP_arr.shape)
+# for z_idx, z in enumerate(z_grid):
+#     niz_true_RP_partial = partial(niz_true_RP, z=z, R_func=R_with_P)
+#     with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+#         niz_true_RwithP_arr[:, z_idx] = np.array(pool.map(niz_true_RP, range(zbins)))
+
 
 plt.figure()
-plt.plot(R_with_p_list, label='R_with_p_list')
+# plt.plot(R_with_p_list, label='R_with_p_list')
+plt.plot(niz_true_RP_integrand_list, label='niz_true_RP_integrand_list')
 plt.show()
 plt.legend()
 
-plt.figure()
 # * normalize the arrays
 niz_fid = normalize_niz_simps(niz_fid, z_grid)
 niz_true = normalize_niz_simps(niz_true, z_grid)
-# ! XXX should niz_true_RP_arr be identical to niz_true?
-niz_true_RP_arr = normalize_niz_simps(niz_true_RP_arr, z_grid)
-# ! XXX should niz_true_RP_arr be identical to niz_true?
-niz_true_RP_arr_2 = normalize_niz_simps(niz_true_RP_arr_2, z_grid)
+niz_true_RnoP_arr = normalize_niz_simps(niz_true_RnoP_arr, z_grid)
+niz_true_RwithP_arr = normalize_niz_simps(niz_true_RwithP_arr, z_grid)
 
 # * compute z shifts
 # TODO fix ray
@@ -418,7 +448,6 @@ niz_shifted = np.asarray([[niz_unnormalized_quad(z - delta_z[zbin_idx], zbin_idx
 niz_shifted = normalize_niz_simps(niz_shifted, z_grid)
 
 # * plot everything
-
 # linspace from rainbow colormap
 colors = np.linspace(0, 1, zbins)
 colors = cm.get_cmap('rainbow')(colors)
@@ -429,15 +458,15 @@ plt.figure()
 for zbin_idx in range(zbins):
     if zbin_idx != 0:
         label_switch = 0
-    # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[0])
-    # plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
-    plt.plot(z_grid, niz_true_RP_arr[zbin_idx, :], label='niz_true_RP_arr' * label_switch, color=colors[zbin_idx],
+    # plt.plot(z_grid, niz_fid[zbin_idx, :], label='niz_fid' * label_switch, c=colors[zbin_idx], ls=lnstl[0])
+    plt.plot(z_grid, niz_true[zbin_idx, :], label='niz_true' * label_switch, c=colors[zbin_idx], ls=lnstl[1])
+    plt.plot(z_grid, niz_true_RnoP_arr[zbin_idx, :], label='niz_true_RnoP_arr' * label_switch, c=colors[zbin_idx],
              ls='-', alpha=0.6)
-    plt.plot(z_grid, niz_true_RP_arr_2[zbin_idx, :], label='niz_true_RP_arr_2' * label_switch, color=colors[zbin_idx],
-             ls='--', alpha=0.6)
-    # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, color=colors[zbin_idx], ls=lnstl[1])
-    # plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
-    # plt.axvline(zmean_true[zbin_idx], label='zmean_true' * label_switch, color=colors[zbin_idx], ls=lnstl[2])
+    plt.plot(z_grid, niz_true_RwithP_arr[zbin_idx, :], label='niz_true_RwithP_arr' * label_switch,
+             c=colors[zbin_idx], ls='-.', alpha=0.6)
+    # plt.plot(z_grid, niz_shifted[zbin_idx, :], label='niz_shifted' * label_switch, c=colors[zbin_idx], ls=lnstl[1])
+    # plt.axvline(zmean_fid[zbin_idx], label='zmean_fid' * label_switch, c=colors[zbin_idx], ls=lnstl[2])
+    # plt.axvline(zmean_true[zbin_idx], label='zmean_true' * label_switch, c=colors[zbin_idx], ls=lnstl[2])
 plt.legend()
 
 # nicer legend
