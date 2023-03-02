@@ -94,10 +94,10 @@ c_pert = np.ones(N_pert)
 nu_out = 1.  # weights for Eq. (7)
 nu_in = 1.
 
-gaussian_zero_cut = 1e-26  # ! dangerous?
+gaussian_zero_cut = 1e-26  # ! delicate point
 # TODO remove this cut on P? better at a higher level (aka R_with_P function)?
-max_P_cut = 250  # ! dangerous?
-exponent_cut = 60  # ! dangerous?
+max_P_cut = 250  # ! delicate point
+exponent_cut = 60  # ! delicate point
 manual_zmax = 4.
 
 assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
