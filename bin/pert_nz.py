@@ -84,7 +84,7 @@ sqrt2pi = np.sqrt(2 * np.pi)
 
 # various parameters for the perturbed photo-z PDF
 # rng = np.random.default_rng(seed=42)
-rng = np.random.default_rng()
+rng = np.random.default_rng(seed=20)
 nu_pert = rng.uniform(-1, 1, N_pert)
 nu_pert /= np.sum(nu_pert)  # normalize the weights to 1
 z_minus_pert = rng.uniform(-0.15, 0.15, N_pert)
@@ -97,14 +97,13 @@ nu_in = 1.
 gaussian_zero_cut = 1e-26  # ! dangerous?
 # TODO remove this cut on P? better at a higher level (aka R_with_P function)?
 max_P_cut = 250  # ! dangerous?
-exponent_cut = 50  # ! dangerous?
+exponent_cut = 60  # ! dangerous?
 manual_zmax = 4.
 
 assert type(nu_pert) == np.ndarray, "nu_pert must be an array"
 
 
 # TODO z_edges[-1] = 2.5?? should it be 4 instead?
-# TODO do not redefine functions here! Take as many as you can from wf.py
 # TODO check different values of gaussian_zero_cut
 
 # a couple simple functions to go from (z_minus_case, z_plus_case) to (z_case, sigma_case);
@@ -219,6 +218,7 @@ def P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
 # these are just convenience wrapper functions
 # @njit
 def P_eff(z_p, z, zbin_idx):
+    # TODO z_eff, sigma_eff are free parameters of the function!
     # ! these 3 paramenters have to be found by solving Eqs. 16 to 19
     return P(z_p, z, zbin_idx, z_eff, sigma_eff, z_in, sigma_in)
 
@@ -294,8 +294,8 @@ def R_out(z_p, z, zbin_idx, R_func=R_no_P):  # is this supposed to have a sum?
         return R_func(z_p, z, zbin_idx, nu_out * np.ones(N_pert), c_out * np.ones(N_pert), z_out * np.ones(N_pert),
                       sigma_out * np.ones(N_pert))
     elif R_func == R_with_P:
-        return R_func(z_p, z, zbin_idx, nu_out * np.ones(N_pert), z_out*np.ones(N_pert), sigma_out * np.ones(N_pert),
-                      z_in, sigma_in)[0] # this is not very nice, the function o   utputs an array with
+        return R_func(z_p, z, zbin_idx, nu_out * np.ones(N_pert), z_out * np.ones(N_pert), sigma_out * np.ones(N_pert),
+                      z_in, sigma_in)[0]  # this is not very nice, the function o   utputs an array with
 
 
 #################################################### niz functions #####################################################
