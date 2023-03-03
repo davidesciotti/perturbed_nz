@@ -324,24 +324,26 @@ niz_unnormalized_quadvec = wf_cl_lib.niz_unnormalized_quadvec
 niz_unnormalized_analytical = wf_cl_lib.niz_unnormalized_analytical
 niz_normalization_quad = wf_cl_lib.niz_normalization_quad
 normalize_niz_simps = wf_cl_lib.normalize_niz_simps
-niz_normalized = wf_cl_lib.niz_normalized  # ! wrong, does not actually accept pph as argument
 
 
-def mean_z(zbin_idx, pph):
-    warnings.warn("the use of niz_normalized should be deprecated")
-    """mean redshift of the galaxies in the zbin_idx-th bin"""
+# niz_normalized = wf_cl_lib.niz_normalized  # ! wrong, does not actually accept pph as argument
+
+
+def mean_z_simps_v2(zbin_idx, niz, zsteps=500, integration='simps'):
+    """mean redshift of the galaxies in the zbin_idx-th bin; niz must be the NORMALIZED galaxy distribution"""
     assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    warnings.warn("is it necessary to use niz_normalized?")
-    return quad(lambda z: z * niz_normalized(z, zbin_idx, pph), z_min, z_max)[0]
+    # check normalization
+    assert np.isclose(quad(lambda z: niz(z, zbin_idx, pph), z_min, z_max)[0], 1), 'niz is not normalized'
+
+    if integration == 'simps':
+        z_grid = np.linspace(z_min, z_max, zsteps)
+        integrand = z_grid * niz(z_grid, zbin_idx, pph)
+        return simps(y=integrand, x=z_grid)
+    elif integration == 'quad':
+        return quad(lambda z: z * niz(z, zbin_idx, pph), z_min, z_max)[0]
 
 
-def mean_z_simps(zbin_idx, pph, zsteps=500):
-    warnings.warn("the use of niz_normalized should be deprecated")
-    """mean redshift of the galaxies in the zbin_idx-th bin; faster version with simpson integration"""
-    assert type(zbin_idx) == int, 'zbin_idx must be an integer'
-    z_grid = np.linspace(z_min, z_max, zsteps)
-    integrand = z_grid * niz_normalized(z_grid, zbin_idx, pph)
-    return simps(y=integrand, x=z_grid)
+# def mean_z_simps_nzeff():
 
 
 # check: construct niz_true using R_no_P and p_func, that is, implement Eq. (5)
@@ -431,12 +433,12 @@ niz_fid = normalize_niz_simps(niz_fid, z_grid)
 niz_true = normalize_niz_simps(niz_true, z_grid)
 niz_true_RnoP_arr = normalize_niz_simps(niz_true_RnoP_arr, z_grid)
 niz_true_RwithP_arr = normalize_niz_simps(niz_true_RwithP_arr, z_grid)
+# niz_eff = np.array([[niz_eff_withR(z=z, zbin_idx=zbin_idx, omega_fid=omega_fid, z_minus_eff=z_minus_eff,
+#                                       z_plus_eff=z_plus_eff, sigma_eff=sigma_eff, pph_fid=pph_fid)
+#                         for z in z_grid]
+#                     for zbin_idx in range(zbins)])
 
 # * compute z shifts
-# TODO fix ray
-# zmean_fid = loop_zbin_idx_ray(mean_z_simps, pph=pph_fid)  # ray gives problems
-# zmean_fid = np.array([mean_z_simps(zbin_idx, pph=pph_fid, zsteps=500) for zbin_idx in range(zbins)])  # no ray problems but mean_z_simps is wrong (no pph!!)
-# zmean_true = loop_zbin_idx_ray(mean_z_simps, pph=pph_true)
 zmean_fid = simps(z_grid * niz_fid, z_grid, axis=1)
 zmean_true = simps(z_grid * niz_true, z_grid, axis=1)
 delta_z = zmean_true - zmean_fid  # ! free to vary, in this case there will be zbins additional parameters
