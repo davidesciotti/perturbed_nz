@@ -187,7 +187,7 @@ pph_pert_ray = ray.remote(pph_pert)
 ##################################################### p_func functions ######################################################
 
 # @njit
-def p_func(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
+def p_func(z_p, z, zbin_idx, z_case, sigma_case):
     """
     parameters named as "<name>_case" shpuld be "_out", "_n" or "_eff"
     """
@@ -215,20 +215,19 @@ def p_eff(z_p, z, zbin_idx, z_minus_eff, z_plus_eff, sigma_eff):
     return result
 
 
-p_out = partial(p_func, z_case=z_out * np.ones(n_pert), sigma_case=sigma_out, z_in=z_in, sigma_in=sigma_in)
-p_pert = partial(p_func, z_case=z_pert, sigma_case=sigma_pert, z_in=z_in, sigma_in=sigma_in)
+p_out = partial(p_func, z_case=z_out * np.ones(n_pert), sigma_case=sigma_out)
+p_pert = partial(p_func, z_case=z_pert, sigma_case=sigma_pert)
 
 
 ##################################################### R_no/with_P functions ######################################################
 
 
 # @njit
-def R_with_P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
+def R_with_P(z_p, z, zbin_idx, z_case, sigma_case):
     """ In this case, I implement the factorization by Vincenzo, with the p_func convenience function.
     This does not work yet."""
 
-    p_shortened = p_func(z_p, z, zbin_idx, z_case, sigma_case, z_in,
-                         sigma_in)  # just to make the equation more readable
+    p_shortened = p_func(z_p, z, zbin_idx, z_case, sigma_case)  # just to make the equation more readable
     exponent = -0.5 * p_shortened / (sigma_in * (1 + z)) ** 2
 
     # cut the exponent to avoid numerical problems
@@ -241,7 +240,7 @@ def R_with_P(z_p, z, zbin_idx, z_case, sigma_case, z_in, sigma_in):
     return result
 
 
-def r_eff(z_p, z, zbin_idx, z_minus_eff, z_plus_eff, sigma_eff, sigma_in):
+def r_eff(z_p, z, zbin_idx, z_minus_eff, z_plus_eff, sigma_eff):
     """ In this case, I implement the factorization by Vincenzo, with the p_func convenience function.
     This does not work yet."""
 
@@ -284,7 +283,7 @@ def R_pert(z_p, z, zbin_idx, R_func):
     if R_func == R_no_P:
         return np.sum(nu_pert * R_func(z_p, z, zbin_idx, c_pert, z_pert, sigma_pert))
     elif R_func == R_with_P:
-        return np.sum(nu_pert * R_func(z_p, z, zbin_idx, z_pert, sigma_pert, z_in, sigma_in))
+        return np.sum(nu_pert * R_func(z_p, z, zbin_idx, z_pert, sigma_pert))
 
 
 # @njit
@@ -295,7 +294,12 @@ def R_out(z_p, z, zbin_idx, R_func):
     if R_func == R_no_P:
         return R_func(z_p, z, zbin_idx, c_out * np.ones(n_pert), z_out * np.ones(n_pert), sigma_out * np.ones(n_pert))
     elif R_func == R_with_P:
-        return R_func(z_p, z, zbin_idx, z_out * np.ones(n_pert), sigma_out * np.ones(n_pert), z_in, sigma_in)
+        return R_func(z_p, z, zbin_idx, z_out * np.ones(n_pert), sigma_out * np.ones(n_pert))
+
+
+#################################################### moments ###########################################################
+
+def s_1():
 
 
 #################################################### niz functions #####################################################
@@ -314,7 +318,7 @@ z_edges_idxs = wf_cl_lib.z_edges_idxs
 niz_unnormalized_simps_fullgrid = wf_cl_lib.niz_unnormalized_simps_fullgrid
 
 # other methods
-warnings.warn("these functions will fork only for ISTF binning scheme!")
+warnings.warn("these n_i(z) functions will fork only for ISTF binning scheme! (z_edges are hardcoded at the moment)")
 niz_unnormalized_quad = wf_cl_lib.niz_unnormalized_quad
 niz_unnormalized_quadvec = wf_cl_lib.niz_unnormalized_quadvec
 niz_unnormalized_analytical = wf_cl_lib.niz_unnormalized_analytical
@@ -342,26 +346,30 @@ def mean_z_simps(zbin_idx, pph, zsteps=500):
 
 # check: construct niz_true using R_no_P and p_func, that is, implement Eq. (5)
 # TODO make this function more generic and/or use simps?
-niz_true_RP_integrand_list = []
 
 
 def niz_true_withR_integrand(z_p, z, zbin_idx, R_func):
-    # try:
-    # is it R_out(z_p, z, zbin_idx)? that is, with R_func=R_no_P?
     integrand = (1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx, R_func) +
-                 (1 - omega_fid) / ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx, R_func)) * \
-                pph(z_p, z, c_case=c_in, z_case=z_in, sigma_case=sigma_in)
-    # except:
-    #     print(R_pert(z_p, z, zbin_idx, R_func))
-    #     print(R_func(z_p, z, zbin_idx, nu_pert, z_pert, sigma_pert, z_in, sigma_in))
-
-    # niz_true_RP_integrand_list.append(integrand)
+                 (1 - omega_fid) / ((1 - omega_out) * omega_fid) * R_pert(z_p, z, zbin_idx, R_func)) * pph_in(z_p, z)
     return integrand
 
 
 def niz_true_withR(z, zbin_idx, R_func):
     return omega_fid * (1 - omega_out) * n_of_z(z) * \
         quad(niz_true_withR_integrand, z_minus[zbin_idx], z_plus[zbin_idx], args=(z, zbin_idx, R_func))[0]
+
+
+def niz_eff_withR_integrand(z_p, z, zbin_idx, omega_fid, z_minus_eff, z_plus_eff, sigma_eff):
+    integrand = (1 + omega_out / (1 - omega_out) * R_out(z_p, z, zbin_idx, R_with_P) +  # ! R_with_P hardcoded, simplify
+                 (1 - omega_fid) / ((1 - omega_out) * omega_fid) *
+                 r_eff(z_p, z, zbin_idx, z_minus_eff, z_plus_eff, sigma_eff)) * pph_in(z_p, z)
+    return integrand
+
+
+def niz_eff_withR(z, zbin_idx, omega_fid, z_minus_eff, z_plus_eff, sigma_eff):
+    return omega_fid * (1 - omega_out) * n_of_z(z) * \
+        quad(niz_eff_withR_integrand, z_minus[zbin_idx], z_plus[zbin_idx],
+             args=(z, zbin_idx, z_minus_eff, z_plus_eff, sigma_eff))[0]
 
 
 def loop_zbin_idx_ray(function, zbins=zbins, **kwargs):
@@ -388,8 +396,7 @@ niz_true_withR_ray = ray.remote(niz_true_withR)
 ########################################################################################################################
 ########################################################################################################################
 
-# z_num = 200
-z_num = 500
+z_num = 250
 if z_num != 500:
     warnings.warn("restore z_num = 500")
 z_grid = np.linspace(0, manual_zmax, z_num)
