@@ -22,19 +22,19 @@ sys.path.append(str(project_path))
 # import proj_lib.cosmo_lib as csmlb
 # import config.config as cfg
 # general configuration modules
-sys.path.append(str(project_path.parent / 'common_data/common_config'))
+sys.path.append(str(project_path.parent / 'common_lib_and_cfg/common_config'))
 import ISTF_fid_params as ISTF
-import mpl_cfg as mpl_cfg
+# import mpl_cfg as mpl_cfg
 
-sys.path.append(str(project_path.parent / 'common_data/common_lib'))
+sys.path.append(str(project_path.parent / 'common_data_and_lib/common_lib'))
 import my_module as mm
 
 sys.path.append(f'{project_path.parent}/cl_v2/bin')
 import wf_cl_lib
 
 # update plot paramseters
-rcParams = mpl_cfg.mpl_rcParams_dict
-plt.rcParams.update(rcParams)
+# rcParams = mpl_cfg.mpl_rcParams_dict
+# plt.rcParams.update(rcParams)
 matplotlib.use('Qt5Agg')
 
 ray.init(ignore_reinit_error=True, logging_level=logging.ERROR, dashboard_host='0.0.0.0')
